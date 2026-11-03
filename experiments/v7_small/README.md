@@ -63,3 +63,102 @@ Official references:
 - https://storage.googleapis.com/mediapipe-assets/face_landmark.tflite
 - https://github.com/google-ai-edge/mediapipe/blob/master/mediapipe/modules/face_landmark/face_landmark_cpu.pbtxt
 - https://github.com/google-ai-edge/mediapipe/blob/master/mediapipe/modules/face_landmark/tensors_to_face_landmarks.pbtxt
+
+
+## Gmail email and webhook notifications
+
+The simpler dashboard keeps per-pose recalibration and raw measurements collapsed.
+Open **Wi-Fi & notifications** to connect the device to internet Wi-Fi. Choose **Load saved settings**; no dashboard access key is required.
+
+For Gmail, enable Gmail email, enter the sender address and one recipient, and
+enter a 16-character Google app password. Enable 2-Step Verification on the Google
+account first, then generate the app password at
+https://myaccount.google.com/apppasswords . Ordinary account passwords are not the
+SMTP app-password credential. Gmail is fixed to smtp.gmail.com:465 with verified
+TLS. Workspace accounts may have administrator restrictions on app passwords.
+
+Save, wait for internet clock sync, and press **Test email**. Watch the delivery
+status: **Email accepted by Gmail** confirms SMTP acceptance, not delivery to the
+recipient inbox. Check the inbox/spam folder. Real Gmail delivery has not been
+verified in development because no real account credentials were supplied.
+
+Webhook delivery is optional and can be enabled later with an HTTPS URL. POST
+JSON contains `device`, `event`, `duration_ms`, `uptime_ms`, `experimental`, `text`
+and `content` fields; text/content carry the same human-readable description.
+Event names are `eyes_closed`, `mouth_open`, `head_down`, `looking_away`,
+`head_tilt`, or `test`. No camera images or credentials are sent in the payload.
+Only HTTP 2xx responses count as accepted; redirects are not followed.
+
+Choose event types and a 30–3600 second cooldown (default 60) per type. A sustained
+event sends at most once and must clear before another notification. Automatic
+thresholds are 1.5 s for eyes, 3 s for mouth and 2.5 s for head/away/tilt. Missing
+or invalid faces are not sleeping events. Calibration does not emit detections.
+
+Delivery runs on a lower-priority task with a six-item queue and timeouts; it
+never performs SMTP/HTTPS in the inference task. Offline observations are skipped
+and queued items older than 30 seconds are dropped. Failed sends are not retried
+because a lost SMTP acknowledgement can leave delivery ambiguous. Internet loss
+does not stop camera monitoring; delivery status reports failures separately.
+
+Settings persist in the separate `sr_alerts` NVS namespace, with channels disabled
+until configured. Passwords and webhook URLs are never returned to the browser;
+blank fields keep saved secrets. Loading, saving and testing do not require an access key. The local settings page is HTTP, so use the protected hotspot or a trusted
+LAN. NVS stores these credentials; this prototype does not enable flash encryption.
+
+TLS verifies server certificates against the ESP-IDF certificate bundle. SNTP
+sets the clock for certificate validity. TLS buffers use PSRAM to preserve
+internal camera/network memory. The existing `small_cal` calibration and model
+weights are unchanged. Board delivery, persistence across reboot and concurrent
+inference timing still need a hardware test with the configured account.
+
+Host checks:
+`tests/alerts_test.cpp` exercises event rearming/cooldowns, address validation,
+SMTP multiline responses, authentication failures, body escaping and acceptance;
+`tests/notifications_ui_test.cjs` exercises keyless settings, preserving secrets,
+password normalization, errors and offline status. Desktop/mobile layouts were
+also rendered in a headless browser. A successful build does not prove external
+delivery.
+
+References:
+- https://support.google.com/accounts/answer/185833
+- https://knowledge.workspace.google.com/admin/gmail/send-email-from-a-printer-scanner-or-app
+- https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32/api-reference/protocols/esp_http_client.html
+
+Calibration, Wi-Fi and notification controls do not require a dashboard access key. The hotspot Wi-Fi password remains 12345678.
+
+
+## Hotspot internet sharing
+
+IPv4 NAT now shares the station's Wi-Fi uplink with clients on SAFE_ROAD. The
+hotspot remains 192.168.4.1 and keeps its Wi-Fi password. Forwarding is enabled
+only after the station obtains an IPv4 address, and disabled on disconnect or
+lost IP. DHCP advertises upstream DNS, with 1.1.1.1 as a fallback if no IPv4 DNS
+was supplied. No inbound port mappings are enabled.
+
+Flash the smaller firmware normally. Connect it to your internet Wi-Fi, wait for
+`HOTSPOT SHARING READY` in serial or the sharing-ready dashboard message, then
+turn your phone's Wi-Fi off/on or disconnect/reconnect SAFE_ROAD once to renew
+its DNS information. Open a normal website to test. This uses IPv4 NAT and does
+not bypass a router's captive portal, unavailable uplink, or access restrictions.
+A sharing-ready status reports the configured route, not a verified internet test.
+
+If home Wi-Fi also uses the 192.168.4.x subnet, sharing stays disabled and the
+page reports the conflict; use a different upstream network/subnet. The local
+calibration/dashboard and offline inference remain available. Phone browsing
+shares radio/CPU resources with inference, so hardware latency/throughput need
+measurement. The user confirmed phone browsing works through the hotspot. Throughput and inference impact have not been measured.
+
+`/api/status` identifies this version as `small-notify-nat-1` and includes
+`internet_sharing` and `sharing_status`. The notification POST route remains
+`/api/notifications`; Gmail uses the station connection independently of phone
+internet sharing. A 404 from that local route is not a Gmail/internet failure.
+
+Host tests cover overlapping IPv4 subnets and the dashboard sharing messages.
+
+
+MacroDroid webhook setup: use the complete Webhook (URL) trigger address,
+including its identifier, for example
+`https://trigger.macrodroid.com/<device-id>/safe_road`. The base device URL alone
+returns 404. Save and enable the macro with the same identifier and a notification
+action, then save the complete URL in the dashboard and test. The user confirmed
+this works. No actual device webhook URL or Gmail credential is stored here.

@@ -7,7 +7,7 @@ const base={age_ms:0,face:false,calibrated:false,calibration_running:false,calib
 function update(extra){ctx.sample={...base,...extra};vm.runInContext('update(sample)',ctx)}
 update({});assert.equal(elements.get('calState').textContent,'Ready when you are');assert.match(elements.get('engineState').textContent,/700 ms/);
 update({calibration_running:true,calibration_waiting:true});assert.equal(elements.get('ready').disabled,false);assert.equal(elements.get('restart').disabled,true);
-update({face:true,calibrated:true,calibration_saved:true,eye:'OPEN-LIKE',mouth:'SHUT-LIKE',away:'NO',tilt:'NO',overlay:[.4,.4,.6,.4]});assert.equal(elements.get('eyeState').textContent,'OPEN-LIKE');assert.match(elements.get('calNote').textContent,/Saved on device/);
+update({face:true,calibrated:true,calibration_saved:true,eye:'OPEN-LIKE',mouth:'SHUT-LIKE',away:'NO',tilt:'NO',overlay:[.4,.4,.6,.4]});assert.equal(elements.get('eyeState').textContent,'Open');assert.match(elements.get('calNote').textContent,/Saved on device/);
 update({engine_error:'V7 model loading failed'});assert.equal(elements.get('engineState').textContent,'V7 model loading failed');
 update({calibration_running:true,calibration_preparing:true,calibration_wait_s:0,face_reason:'Landmark face confidence too low'});assert.match(elements.get('calNote').textContent,/Landmark face confidence too low/);
 console.log('PASS: actual dashboard DOM ids, idle/ready/saved states, landmark overlay and model error feedback');

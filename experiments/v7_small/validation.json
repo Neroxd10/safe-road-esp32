@@ -576,8 +576,8 @@
   "build": {
     "passed": true,
     "target": "esp32s3",
-    "firmware_bytes": 3729760,
-    "sha256": "72335ef63e5ba722028c15c7b1d89f618f4e43e189cde439c8548b36fa885363",
+    "firmware_bytes": 3934944,
+    "sha256": "1f02c5392b3a248b42235cc797a94c07e39f21a21fb7a2c9df5542eed75ce2d3",
     "geometry_decision_tests": "passed",
     "dashboard_tests": "passed",
     "embedded_device_output_checks": "pending; both single/multi-core required on boot",
@@ -605,5 +605,43 @@
       "OPEN-LIKE"
     ],
     "accuracy_validation": "User logs show state changes; physical pose correspondence and broad real-world accuracy not independently verified"
+  },
+  "notifications": {
+    "build_passed": true,
+    "host_smtp_protocol_and_event_policy": "passed",
+    "dashboard_regressions": "passed",
+    "notification_form_tests": "passed",
+    "layout_viewports_px": [
+      390,
+      1100
+    ],
+    "horizontal_overflow": false,
+    "smtp": "smtp.gmail.com:465, TLS certificate verification, AUTH LOGIN app password",
+    "webhook": "HTTPS JSON POST, certificate verification, no redirects",
+    "default_enabled": false,
+    "persistence_namespace": "sr_alerts",
+    "calibration_preserved": "small_cal unchanged",
+    "inference_network_io": "none; lower-priority background worker",
+    "device_delivery_test": "User confirmed MacroDroid webhook works after adding the trigger identifier; Gmail delivery not yet confirmed",
+    "device_latency_after_notifications": "pending; prior 503\u2013536 ms observation predates this feature",
+    "calibration_without_key_ui_test": "passed",
+    "dashboard_access": "No access key required for calibration, Wi-Fi, settings or notification tests",
+    "keyless_controls_regression": "passed"
+  },
+  "status": "Smaller model, hotspot browsing and MacroDroid webhook confirmed by user; build and host checks pass; Gmail delivery unverified",
+  "calibration_access": "No key required; Calibrate, Ready and per-pose recapture work directly",
+  "hotspot_sharing": {
+    "build": "passed",
+    "firmware_id": "small-notify-nat-1",
+    "ipv4_forwarding": true,
+    "napt": true,
+    "inbound_portmap": false,
+    "dhcp_dns": "upstream IPv4 DNS; 1.1.1.1 fallback",
+    "disable_on": "station disconnect or lost IP",
+    "overlap_detection_tests": "passed",
+    "dashboard_tests": "passed",
+    "phone_browsing": "User confirmed browsing works through SAFE_ROAD hotspot",
+    "instruction": "Wait for HOTSPOT SHARING READY, then rejoin SAFE_ROAD to refresh DNS if needed",
+    "calibration_and_hotspot_password_changed": false
   }
 }

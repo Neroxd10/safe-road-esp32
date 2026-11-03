@@ -32,6 +32,9 @@
 #include "freertos/task.h"
 #include "v7_engine.hpp"
 #include "small_features.hpp"
+#include "alerts.hpp"
+#include "esp_netif_sntp.h"
+#include "network_policy.hpp"
 #include "dl_image_jpeg.hpp"
 
 
@@ -80,6 +83,18 @@ static std::atomic<bool> g_wifi_connected(false);
 static std::atomic<bool> g_wifi_connecting(false);
 static std::atomic<bool> g_wifi_pending(false);
 static esp_netif_t *g_sta_netif = nullptr;
+static esp_netif_t *g_ap_netif = nullptr;
+enum class Sharing { Offline, Ready, SubnetConflict, DnsFailed, NatFailed };
+static std::atomic<Sharing> g_sharing{Sharing::Offline};
+static const char *sharing_message(Sharing state){
+    switch(state){
+    case Sharing::Ready:return "Hotspot sharing ready; reconnect to SAFE_ROAD once if browsing does not work";
+    case Sharing::SubnetConflict:return "Home Wi-Fi overlaps 192.168.4.x; use a different upstream network";
+    case Sharing::DnsFailed:return "Could not configure hotspot DNS; reconnect home Wi-Fi";
+    case Sharing::NatFailed:return "Could not enable hotspot forwarding; check serial log";
+    default:return "Connect the device to internet Wi-Fi to share its connection";
+    }
+}
 static char g_ap_ssid[33] = {};
 static char g_ap_password[20] = {};
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
@@ -435,7 +450,9 @@ static void track_frame(const Pose &p, bool have_eyes, bool have_mouth)
         xSemaphoreGive(g_telemetry_mutex);
     }
 
-    // Print metrics about once a second, plus the state duration. No physical alarms.
+    const int64_t durations[5]={eye_ms,mouth_ms,down_ms,away_ms,tilt_ms};
+    alerts::observe(durations);
+    // Serial metrics are rate-limited independently of background notifications.
     if (now-last_report_us < 1000000) return;
     last_report_us=now;
     ESP_LOGI(TAG,"eye=%s (%lldms) mouth=%s (%lldms) headDown~=%s (%.2f,%lldms)",
@@ -486,6 +503,7 @@ static void accept_sample(const Pose &p, bool have_eyes, bool have_mouth)
 }
 
 static void reset_timers() {
+    alerts::reset_episode();
     hold_eye.reset();hold_mouth.reset();hold_down.reset();hold_away.reset();hold_tilt.reset();
 }
 
@@ -605,10 +623,6 @@ static void face_task(void *)
 }
 
 
-static bool admin_key_valid(const cJSON *request) {
-    const cJSON *key = cJSON_GetObjectItemCaseSensitive(request,"key");
-    return cJSON_IsString(key) && key->valuestring && strcmp(key->valuestring,g_ap_password)==0;
-}
 static esp_err_t json_reply(httpd_req_t *req, cJSON *doc, int code = 200) {
     if (!doc) { httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Out of memory"); return ESP_FAIL; }
     char *json = cJSON_PrintUnformatted(doc);
@@ -631,8 +645,8 @@ static esp_err_t error_json(httpd_req_t *req, const char *message, int code) {
     return json_reply(req,doc,code);
 }
 static cJSON *post_json(httpd_req_t *req) {
-    if (req->content_len <= 0 || req->content_len > 384) return nullptr;
-    char data[385]; size_t offset=0;
+    if (req->content_len <= 0 || req->content_len > 1536) return nullptr;
+    char data[1537]; size_t offset=0;
     while (offset < static_cast<size_t>(req->content_len)) {
         int n=httpd_req_recv(req,data+offset,req->content_len-offset);
         if (n<=0) return nullptr;
@@ -659,6 +673,11 @@ static esp_err_t status_handler(httpd_req_t *req) {
     const char *const steps[]={
       "Eyes open", "Eyes closed", "Neutral / mouth closed", "Mouth wide open", "Head down",
       "Turn head left", "Turn head right", "Tilt head left", "Tilt head right"};
+    cJSON_AddStringToObject(doc,"firmware","small-notify-nat-1");
+    const Sharing sharing=g_sharing.load();
+    cJSON_AddBoolToObject(doc,"internet_sharing",sharing==Sharing::Ready&&g_wifi_connected.load());
+    cJSON_AddStringToObject(doc,"sharing_status",sharing_message(sharing));
+    alerts::status(doc);
     cJSON_AddBoolToObject(doc,"face",t.face);
     cJSON_AddStringToObject(doc,"engine_error",t.engine_error);
     cJSON_AddStringToObject(doc,"face_reason",t.face_reason);
@@ -743,7 +762,6 @@ static esp_err_t frame_handler(httpd_req_t *req) {
 static esp_err_t wifi_handler(httpd_req_t *req) {
     cJSON *doc=post_json(req);
     if (!doc) return error_json(req,"Invalid JSON",400);
-    if (!admin_key_valid(doc)) {cJSON_Delete(doc);return error_json(req,"Wrong setup access key",403);}
     const cJSON *ssid=cJSON_GetObjectItemCaseSensitive(doc,"ssid");
     const cJSON *pass=cJSON_GetObjectItemCaseSensitive(doc,"password");
     if (!cJSON_IsString(ssid) || !ssid->valuestring || !cJSON_IsString(pass) || !pass->valuestring) {
@@ -776,7 +794,6 @@ static esp_err_t wifi_handler(httpd_req_t *req) {
 static esp_err_t forget_wifi_handler(httpd_req_t *req) {
     cJSON *doc=post_json(req);
     if (!doc) return error_json(req,"Invalid JSON",400);
-    if (!admin_key_valid(doc)) {cJSON_Delete(doc);return error_json(req,"Wrong setup access key",403);}
     cJSON_Delete(doc);
     g_wifi_pending.store(true);
     esp_wifi_disconnect();
@@ -791,7 +808,7 @@ static esp_err_t forget_wifi_handler(httpd_req_t *req) {
 static esp_err_t restart_handler(httpd_req_t *req) {
     cJSON *doc=post_json(req);
     if (!doc) return error_json(req,"Invalid JSON",400);
-    if (!admin_key_valid(doc)) {cJSON_Delete(doc);return error_json(req,"Wrong setup access key",403);}
+    // Calibration buttons are available directly on the local dashboard.
     const cJSON *selected=cJSON_GetObjectItemCaseSensitive(doc,"stage");
     int requested=-1;
     const cJSON *action=cJSON_GetObjectItemCaseSensitive(doc,"action");
@@ -852,8 +869,42 @@ static esp_err_t scan_handler(httpd_req_t *req) {
     }
     free(aps);return json_reply(req,doc);
 }
+static void stop_internet_sharing(){
+    g_sharing.store(Sharing::Offline);
+    if(g_ap_netif)esp_netif_napt_disable(g_ap_netif);
+}
+static void start_internet_sharing(const esp_netif_ip_info_t &upstream){
+    stop_internet_sharing();
+    esp_netif_ip_info_t ap={};
+    if(!g_ap_netif||esp_netif_get_ip_info(g_ap_netif,&ap)!=ESP_OK){g_sharing.store(Sharing::NatFailed);return;}
+    if(networking::overlapping_subnets(ap.ip.addr,ap.netmask.addr,upstream.ip.addr,upstream.netmask.addr)){
+        g_sharing.store(Sharing::SubnetConflict);ESP_LOGW(TAG,"Hotspot sharing unavailable: upstream subnet overlaps hotspot");return;
+    }
+    esp_netif_dns_info_t dns={};
+    if(esp_netif_get_dns_info(g_sta_netif,ESP_NETIF_DNS_MAIN,&dns)!=ESP_OK||
+       dns.ip.type!=ESP_IPADDR_TYPE_V4||dns.ip.u_addr.ip4.addr==0){
+        dns.ip.type=ESP_IPADDR_TYPE_V4;dns.ip.u_addr.ip4.addr=ESP_IP4TOADDR(1,1,1,1);
+    }
+    // Same DNS/DHCP sequence as ESP-IDF's softap_sta example. Existing clients
+    // may need to renew/rejoin to pick up the new upstream DNS server.
+    const esp_err_t stopped=esp_netif_dhcps_stop(g_ap_netif);
+    if(stopped!=ESP_OK&&stopped!=ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED){
+        g_sharing.store(Sharing::DnsFailed);ESP_LOGW(TAG,"Could not stop hotspot DHCP: %s",esp_err_to_name(stopped));return;
+    }
+    uint8_t offer_dns=0x02;
+    esp_err_t err=esp_netif_dhcps_option(g_ap_netif,ESP_NETIF_OP_SET,ESP_NETIF_DOMAIN_NAME_SERVER,&offer_dns,sizeof(offer_dns));
+    if(err==ESP_OK)err=esp_netif_set_dns_info(g_ap_netif,ESP_NETIF_DNS_MAIN,&dns);
+    const esp_err_t restarted=esp_netif_dhcps_start(g_ap_netif);
+    if(err!=ESP_OK||restarted!=ESP_OK){g_sharing.store(Sharing::DnsFailed);ESP_LOGW(TAG,"Hotspot DNS/DHCP update failed");return;}
+    err=esp_netif_set_default_netif(g_sta_netif);
+    if(err==ESP_OK)err=esp_netif_napt_enable(g_ap_netif);
+    if(err!=ESP_OK){g_sharing.store(Sharing::NatFailed);ESP_LOGW(TAG,"Hotspot NAPT enable failed: %s",esp_err_to_name(err));return;}
+    g_sharing.store(Sharing::Ready);
+    ESP_LOGI(TAG,"HOTSPOT SHARING READY: IPv4 NAT enabled; DNS=" IPSTR,IP2STR(&dns.ip.u_addr.ip4));
+}
 static void wifi_event(void *,esp_event_base_t base,int32_t id,void *data) {
     if (base==WIFI_EVENT && id==WIFI_EVENT_STA_DISCONNECTED) {
+        stop_internet_sharing();
         g_wifi_connected.store(false);
         g_wifi_connecting.store(false);
         if (data) {
@@ -862,11 +913,14 @@ static void wifi_event(void *,esp_event_base_t base,int32_t id,void *data) {
         }
     } else if (base==WIFI_EVENT && id==WIFI_EVENT_STA_CONNECTED) {
         g_wifi_connecting.store(false);
+    } else if (base==IP_EVENT && id==IP_EVENT_STA_LOST_IP) {
+        g_wifi_connected.store(false);stop_internet_sharing();
     } else if (base==IP_EVENT && id==IP_EVENT_STA_GOT_IP) {
         g_wifi_connected.store(true);
         g_wifi_connecting.store(false);
         auto *event=static_cast<ip_event_got_ip_t *>(data);
         ESP_LOGI(TAG,"Wi-Fi connected: " IPSTR,IP2STR(&event->ip_info.ip));
+        start_internet_sharing(event->ip_info);
     }
 }
 static void connection_task(void *) {
@@ -881,9 +935,16 @@ static void connection_task(void *) {
         if (esp_wifi_connect()==ESP_OK) g_wifi_connecting.store(true);
     }
 }
+static esp_err_t notifications_handler(httpd_req_t *req){
+    cJSON *doc=post_json(req);
+    if(!doc)return error_json(req,"Invalid JSON",400);
+    cJSON *response=alerts::request(doc);cJSON_Delete(doc);
+    const bool failed=response&&cJSON_GetObjectItemCaseSensitive(response,"error");
+    return json_reply(req,response,failed?400:200);
+}
 static void start_http() {
     httpd_config_t config=HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers=8;
+    config.max_uri_handlers=9;
     config.stack_size=8192;
     config.recv_wait_timeout=7;
     config.send_wait_timeout=7;
@@ -897,11 +958,12 @@ static void start_http() {
         {.uri="/api/wifi",.method=HTTP_POST,.handler=wifi_handler,.user_ctx=nullptr},
         {.uri="/api/wifi/forget",.method=HTTP_POST,.handler=forget_wifi_handler,.user_ctx=nullptr},
         {.uri="/api/calibration",.method=HTTP_POST,.handler=restart_handler,.user_ctx=nullptr},
+        {.uri="/api/notifications",.method=HTTP_POST,.handler=notifications_handler,.user_ctx=nullptr},
     };
     for (const auto &uri:routes) ESP_ERROR_CHECK(httpd_register_uri_handler(srv,&uri));
 }
 static void load_or_create_ap_password() {
-    // Fixed hotspot password and dashboard key requested for this prototype.
+    // Fixed hotspot password requested for this prototype.
     strcpy(g_ap_password,"12345678");
     nvs_handle_t handle;
     ESP_ERROR_CHECK(nvs_open("safe_road",NVS_READWRITE,&handle));
@@ -920,12 +982,12 @@ static void start_network() {
     load_or_create_ap_password();
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_ap();
+    g_ap_netif=esp_netif_create_default_wifi_ap();
     g_sta_netif=esp_netif_create_default_wifi_sta();
     wifi_init_config_t init=WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT,ESP_EVENT_ANY_ID,&wifi_event,nullptr));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT,IP_EVENT_STA_GOT_IP,&wifi_event,nullptr));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT,ESP_EVENT_ANY_ID,&wifi_event,nullptr));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     uint8_t mac[6]; ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_AP,mac));
@@ -944,9 +1006,8 @@ static void start_network() {
     start_http();
     ESP_LOGW(TAG,"===== SETUP ACCESS =====");
     ESP_LOGW(TAG,"Wi-Fi name: %s",g_ap_ssid);
-    ESP_LOGW(TAG,"Wi-Fi password + dashboard setup key: %s",g_ap_password);
+    ESP_LOGW(TAG,"Wi-Fi password: %s",g_ap_password);
     ESP_LOGW(TAG,"Dashboard: http://192.168.4.1");
-    ESP_LOGW(TAG,"Access key is needed to change Wi-Fi or restart calibration; do not share it.");
     xTaskCreate(connection_task,"wifi_retry",3072,nullptr,3,nullptr);
 }
 
@@ -961,6 +1022,9 @@ extern "C" void app_main(void)
     if (!g_telemetry_mutex || !g_frame_mutex) {ESP_LOGE(TAG,"Mutex allocation failed");return;}
     if (start_camera()!=ESP_OK) {ESP_LOGE(TAG,"Camera initialization failed");return;}
     start_network();
+    esp_sntp_config_t time_config=ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    if(esp_netif_sntp_init(&time_config)!=ESP_OK)ESP_LOGW(TAG,"Internet time sync could not start; TLS notifications may fail");
+    if(!alerts::init(g_ap_ssid,&g_wifi_connected))ESP_LOGE(TAG,"Cannot start background notifications");
     if (xTaskCreatePinnedToCore(face_task,"safe_road_s3",20480,nullptr,5,nullptr,1)!=pdPASS)
         ESP_LOGE(TAG,"Cannot create face monitoring task");
 }

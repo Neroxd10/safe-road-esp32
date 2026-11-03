@@ -1,4 +1,4 @@
-# S.A.F.E. R.O.A.D. � ESP32-S3 offline monitoring
+# S.A.F.E. R.O.A.D. — ESP32-S3 offline monitoring
 
 The current tested experiment is **[the smaller 468-landmark firmware](experiments/v7_small/README.md)**.
 It runs camera capture and inference on an ESP32-S3 N16R8 with OV5640, without a
@@ -13,11 +13,11 @@ idf.py -C experiments/v7_small -p COM11 flash monitor
 
 Use your serial port. Connect to the device hotspot (`SAFE_ROAD_xxxxxx`, default
 setup key `12345678`), open `http://192.168.4.1`, then complete all nine calibration
-poses. Calibration waits for a tap and saves across restart. The smaller model
+poses. Calibration waits for a tap and saves across restart. The dashboard also has optional Gmail SMTP email and HTTPS webhook notifications; see the smaller experiment README for setup. The smaller model
 uses its own calibration, separate from V7. It uses eye/mouth geometry rather
 than expression blendshapes; real-world accuracy is not established.
 
-Reported board timing: approximately **503�536 ms** per tracked reading, with
+Reported board timing: approximately **503–536 ms** per tracked reading, with
 normal updates about every 0.6 seconds. Frames that rerun the detector take longer
 (the supplied example was 1,253 ms). This is not a validated drowsiness alarm.
 
@@ -32,7 +32,7 @@ The earlier standalone firmware and its instructions are retained below.
 
 ---
 
-# S.A.F.E. R.O.A.D. — Standalone Stage 4 Wi-Fi Dashboard
+# S.A.F.E. R.O.A.D. â€” Standalone Stage 4 Wi-Fi Dashboard
 
 **ESP32-S3 N16R8 (16 MB flash + 8 MB octal PSRAM), OV5640, ESP-IDF 5.5.x.** This project builds on the real Stage 3 experimental face/eye/mouth/head monitoring firmware. The ESP32 still performs all inference on-device. The browser is only a display and configuration interface; detection works without any browser or Wi-Fi client connected.
 
