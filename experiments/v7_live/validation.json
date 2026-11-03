@@ -1,0 +1,266 @@
+{
+  "status": "Guarded ESP32-S3 vector activation candidate builds; instruction probes and real-face single/multi-core checks pending board run",
+  "build_passed": true,
+  "firmware_bytes": 6035296,
+  "sha256": "0013e91708bb1d09470f6fecf470cd533da8d0ed35606734e6acced6e8468c81",
+  "cpu_mhz": 240,
+  "compiler_optimization": "performance",
+  "calibration_key": "v7_cal",
+  "original_project_changed": false,
+  "host_cpp_geometry_tests": "passed",
+  "dashboard_tests": "passed",
+  "pc_preprocessing_smoke": {
+    "source_image": "https://storage.googleapis.com/mediapipe-assets/portrait.jpg",
+    "scope": "C++ image sampling plus original full-precision ONNX models on PC; not ESP32 quantized accuracy",
+    "image_size": [
+      820,
+      1024
+    ],
+    "detector_score": 0.9133470058441162,
+    "landmark_confidence": 0.9999998572332465,
+    "roi": [
+      399.7097083262415,
+      231.30476480698468,
+      367.8454546486477,
+      0.057536865817819825
+    ],
+    "ear_left": 0.20463081445203685,
+    "ear_right": 0.19419951988914913,
+    "mouth_ratio": 0.194052224814977,
+    "blink_left": 0.2716599702835083,
+    "blink_right": 0.29204633831977844,
+    "jaw_open": 0.15997719764709473
+  },
+  "models": {
+    "detector.espdl": {
+      "bytes": 254032,
+      "sha256": "8b2b66ea21fd11c1606c3e2a1088a7c2eceda56774f41aeee09d9382937743f6"
+    },
+    "expression.espdl": {
+      "bytes": 669520,
+      "sha256": "13f27be52c2d375fc5a59b8251354fbcb277ab3d37c4b5ae2b830362c0d52c43"
+    },
+    "landmark.espdl": {
+      "bytes": 3169040,
+      "sha256": "1cfc5a5c8630092f2261c29b048d71ef338e849b07b6815f742dcac8ffbc3648"
+    }
+  },
+  "warning_count": 0,
+  "landmark_precision": "INT16",
+  "calibration_version": 3,
+  "face_calibration_regression": {
+    "w8a8": {
+      "cases": [
+        {
+          "presence": 0.00033535013790242374,
+          "reference_presence": 0.9999998572332465,
+          "mean_xy_error_crop_pixels": 20.731979370117188,
+          "max_xy_error_crop_pixels": 77.04011535644531
+        },
+        {
+          "presence": 0.00033535013790242374,
+          "reference_presence": 0.9999997961256415,
+          "mean_xy_error_crop_pixels": 17.669267654418945,
+          "max_xy_error_crop_pixels": 72.17579650878906
+        },
+        {
+          "presence": 0.00033535013790242374,
+          "reference_presence": 0.9999998969980839,
+          "mean_xy_error_crop_pixels": 13.428365707397461,
+          "max_xy_error_crop_pixels": 54.4647216796875
+        },
+        {
+          "presence": 0.00033535013790242374,
+          "reference_presence": 0.9999999433040009,
+          "mean_xy_error_crop_pixels": 19.60191535949707,
+          "max_xy_error_crop_pixels": 60.07487487792969
+        },
+        {
+          "presence": 0.00033535013790242374,
+          "reference_presence": 0.9999997709533742,
+          "mean_xy_error_crop_pixels": 16.628034591674805,
+          "max_xy_error_crop_pixels": 71.33151245117188
+        },
+        {
+          "presence": 0.00033535013790242374,
+          "reference_presence": 0.999999806436996,
+          "mean_xy_error_crop_pixels": 10.400467872619629,
+          "max_xy_error_crop_pixels": 56.72972106933594
+        },
+        {
+          "presence": 0.00033535013790242374,
+          "reference_presence": 0.9999999642048181,
+          "mean_xy_error_crop_pixels": 20.459461212158203,
+          "max_xy_error_crop_pixels": 80.75788879394531
+        },
+        {
+          "presence": 0.00033535013790242374,
+          "reference_presence": 0.9999998476054194,
+          "mean_xy_error_crop_pixels": 10.790741920471191,
+          "max_xy_error_crop_pixels": 46.81657409667969
+        },
+        {
+          "presence": 0.00033535013790242374,
+          "reference_presence": 0.9999999806074543,
+          "mean_xy_error_crop_pixels": 16.22220230102539,
+          "max_xy_error_crop_pixels": 61.97016906738281
+        }
+      ],
+      "artifact": "C:\\Users\\Administrator\\Documents\\ChatGPT\\adruino\\experiments\\v7_live\\tests\\landmark_faces_w8a8.espdl",
+      "bytes": 1747472
+    },
+    "w16a16": {
+      "cases": [
+        {
+          "presence": 0.9999998807907104,
+          "reference_presence": 0.9999998572332465,
+          "mean_xy_error_crop_pixels": 0.09545595198869705,
+          "max_xy_error_crop_pixels": 0.31591796875
+        },
+        {
+          "presence": 0.9999997615814209,
+          "reference_presence": 0.9999997961256415,
+          "mean_xy_error_crop_pixels": 0.10621580481529236,
+          "max_xy_error_crop_pixels": 0.345123291015625
+        },
+        {
+          "presence": 0.9999998807907104,
+          "reference_presence": 0.9999998969980839,
+          "mean_xy_error_crop_pixels": 0.10685481876134872,
+          "max_xy_error_crop_pixels": 0.34844207763671875
+        },
+        {
+          "presence": 1.0,
+          "reference_presence": 0.9999999433040009,
+          "mean_xy_error_crop_pixels": 0.09646236896514893,
+          "max_xy_error_crop_pixels": 0.295196533203125
+        },
+        {
+          "presence": 0.9999997615814209,
+          "reference_presence": 0.9999997709533742,
+          "mean_xy_error_crop_pixels": 0.10396847128868103,
+          "max_xy_error_crop_pixels": 0.2981109619140625
+        },
+        {
+          "presence": 0.9999997615814209,
+          "reference_presence": 0.999999806436996,
+          "mean_xy_error_crop_pixels": 0.09780562669038773,
+          "max_xy_error_crop_pixels": 0.3145904541015625
+        },
+        {
+          "presence": 1.0,
+          "reference_presence": 0.9999999642048181,
+          "mean_xy_error_crop_pixels": 0.10330617427825928,
+          "max_xy_error_crop_pixels": 0.320709228515625
+        },
+        {
+          "presence": 0.9999998807907104,
+          "reference_presence": 0.9999998476054194,
+          "mean_xy_error_crop_pixels": 0.09079865366220474,
+          "max_xy_error_crop_pixels": 0.324951171875
+        },
+        {
+          "presence": 1.0,
+          "reference_presence": 0.9999999806074543,
+          "mean_xy_error_crop_pixels": 0.10419061779975891,
+          "max_xy_error_crop_pixels": 0.39748382568359375
+        }
+      ],
+      "artifact": "C:\\Users\\Administrator\\Documents\\ChatGPT\\adruino\\experiments\\v7_live\\tests\\landmark_faces_w16a16.espdl",
+      "bytes": 3169040
+    },
+    "selected": "w16a16"
+  },
+  "previous_int8_portrait_failure": {
+    "face_detector": {
+      "best_score": 0.970687747001648
+    },
+    "face_landmarks_detector": {
+      "landmark_presence": 0.01798621006309986
+    }
+  },
+  "int16_prelu_fix": {
+    "scope": "project-local module override; shared runtime sources unchanged",
+    "affected_rescaling_layers": 9,
+    "host_reference_cases_passed": 1638400,
+    "device_confirmation": "pending",
+    "tolerances_relaxed": false
+  },
+  "last_board_presence_test": {
+    "expected_raw": 16124,
+    "observed_raw": 16134,
+    "exponent": -10,
+    "decoded_logit_error": 0.009765625,
+    "legacy_integer_check_result": "ESP_FAIL"
+  },
+  "startup_validation": {
+    "mode": "decoded physical units; replaces global raw-integer comparison",
+    "mean_xy_px": 0.1,
+    "max_xy_px": 0.5,
+    "max_z_px": 1.0,
+    "max_presence_logit_error": 0.025,
+    "max_auxiliary_error": 0.002,
+    "minimum_reference_face_confidence": 0.9,
+    "all_three_heads_required": true,
+    "non_finite_rejected": true,
+    "host_guard_tests": "passed",
+    "device_validation": "User reports baseline working; optimized single and multi-core startup checks pending flash"
+  },
+  "speed_pass": {
+    "baseline_reported_ms": 3000,
+    "changes": [
+      "Cached PReLU exponents and channel metadata",
+      "Power-of-two shift requantization",
+      "Dual-core execution for large PReLU layers",
+      "Cached image crop trigonometry and quantization scale",
+      "Serial and dashboard stage timing"
+    ],
+    "prelu_reference_cases_passed": 1638400,
+    "image_tensor_elements_matched": 110592,
+    "model_weights_changed": false,
+    "thresholds_changed": false,
+    "measured_device_speed": "pending",
+    "build_passed": true
+  },
+  "speed_pass_2": {
+    "baseline_board_tracked_ms": [
+      1900,
+      1903,
+      1898,
+      1892
+    ],
+    "baseline_prep_ms": 357,
+    "baseline_prelu_ms": 430,
+    "changes": [
+      "Shared RGB source-address and border calculations with identical multiply/add order",
+      "Parallel disjoint-row image preparation on synchronized runtime workers",
+      "Specialized PReLU loops selected once per worker, outside element loop"
+    ],
+    "specialized_worker_reference_cases": 3145728,
+    "existing_activation_reference_cases": 1638400,
+    "camera_rgb_exact_comparisons": 120000,
+    "split_row_tensor_parity": "passed",
+    "build": "passed",
+    "device_timing": "pending",
+    "model_weights_changed": false,
+    "thresholds_changed": false
+  },
+  "speed_pass_3": {
+    "baseline_board_total_ms": 1590,
+    "baseline_prelu_ms": 320,
+    "changes": [
+      "Eight-lane ESP32-S3 vector PReLU for aligned equal-exponent layers",
+      "Bounded aligned internal-RAM slope cache with 64KiB allocation-time free-heap reserve",
+      "Aligned original per-channel weights remain eligible when cache cannot be allocated"
+    ],
+    "cache_limit_bytes": 16384,
+    "instruction_probe": "At first use of each eligible shift: all 65536 INT16 input values against eight slopes (524288 comparisons). Mismatch disables vector path for that shift. Hardware results pending.",
+    "other_layers": "Exact scalar fallback",
+    "build": "passed",
+    "model_self_tests": "Single-core and multi-core real-face reference checks retained; board run pending",
+    "device_timing": "pending",
+    "model_weights_changed": false,
+    "thresholds_changed": false,
+    "rollback_app": "tests/before_vector/safe_road_v7_live.bin"
+  }
+}

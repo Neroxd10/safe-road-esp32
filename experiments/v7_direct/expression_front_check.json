@@ -1,0 +1,61 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "op": "ReduceMean",
+      "name": "model_1/tf.math.reduce_mean/Mean",
+      "max_abs": 7.450580596923828e-09
+    },
+    {
+      "op": "Sub",
+      "name": "model_1/tf.math.subtract/Sub",
+      "max_abs": 2.384185791015625e-07
+    },
+    {
+      "op": "Mul",
+      "name": "model_1/tf.compat.v1.norm/norm/mul",
+      "max_abs": 1.430511474609375e-06
+    },
+    {
+      "op": "ReduceSum",
+      "name": "model_1/tf.compat.v1.norm/norm/Sum",
+      "max_abs": 9.5367431640625e-07
+    },
+    {
+      "op": "Sqrt",
+      "name": "model_1/tf.compat.v1.norm/norm/Sqrt",
+      "max_abs": 2.384185791015625e-07
+    },
+    {
+      "op": "ReduceMean",
+      "name": "model_1/tf.math.reduce_mean_1/Mean",
+      "max_abs": 0.0
+    },
+    {
+      "op": "Div",
+      "name": "model_1/tf.math.truediv_1/truediv",
+      "max_abs": 1.1920928955078125e-07
+    },
+    {
+      "op": "Reshape",
+      "name": "model_1/tf.__operators__.getitem_2/strided_slice2",
+      "max_abs": 1.1920928955078125e-07
+    },
+    {
+      "op": "Slice",
+      "name": "model_1/tf.__operators__.getitem_2/strided_slice3",
+      "max_abs": 1.1920928955078125e-07
+    },
+    {
+      "op": "Mul",
+      "name": "model_1/GhumMarkerPoserMlpMixerGeneral/tf.math.truediv/truediv;model_1/GhumMarkerPoserMlpMixerGeneral/tf.math.truediv/truediv/y1",
+      "max_abs": 5.960464477539063e-08
+    },
+    {
+      "op": "Reshape",
+      "name": "model_1/GhumMarkerPoserMlpMixerGeneral/conv2d/BiasAdd;model_1/GhumMarkerPoserMlpMixerGeneral/conv2d/Conv2D;model_1/GhumMarkerPoserMlpMixerGeneral/conv2d/BiasAdd/ReadVariableOp__37:0",
+      "max_abs": 5.960464477539063e-08
+    }
+  ],
+  "scope": "coordinate frontend before first Conv; PC only"
+}

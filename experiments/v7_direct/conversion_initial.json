@@ -1,0 +1,14 @@
+{
+  "face_landmarks_detector.tflite": {
+    "converted": false,
+    "error": "list index out of range"
+  },
+  "face_detector.tflite": {
+    "converted": true,
+    "onnx_bytes": 425659
+  },
+  "face_blendshapes.tflite": {
+    "converted": false,
+    "error": "object of type 'int' has no len()"
+  }
+}

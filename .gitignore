@@ -1,0 +1,38 @@
+# Generated ESP-IDF output
+**/build/
+**/managed_components/.cache/
+/experiments/**/managed_components/
+**/sdkconfig
+**/sdkconfig.old
+**/sdkconfig.*.old
+*.log
+*.map
+*.elf
+*.exe
+*.pdb
+*.obj
+*.pyc
+*.info
+**/__pycache__/
+**/.venv/
+**/.zig-cache/
+**/.pytest_cache/
+**/node_modules/
+# Personal samples, secrets and local state
+/training/
+.env
+.env.*
+*.pem
+*.key
+.codex/
+.agents/
+# Generated firmware snapshots and duplicate experimental output
+*.bin
+*.npy
+/experiments/**/tests/before*/
+/experiments/v7_direct/models/archive/
+/experiments/**/unused*
+# Public portrait reference tensors used by the conversion checks
+!/experiments/v7_live/tests/detector_input.bin
+!/experiments/v7_live/tests/landmark_input.bin
+!/experiments/v7_small/tests/reference_crop.npy

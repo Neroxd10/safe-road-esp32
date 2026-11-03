@@ -1,0 +1,8 @@
+{
+  "face_detector": {
+    "best_score": 0.970687747001648
+  },
+  "face_landmarks_detector": {
+    "landmark_presence": 0.01798621006309986
+  }
+}

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#101b2c"><title>SAFE ROAD | Standalone Monitor</title>
+<style>
+:root{color-scheme:dark;--bg:#0a1220;--card:#132039;--in:#0e192e;--line:#2d405c;--txt:#eef5ff;--sub:#9fb1ca;--teal:#5be3c4;--amber:#ffc777;--red:#fb8b93}*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top,#20344d 0,#0a1220 65%);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--txt)}.container{max-width:1200px;padding:24px 18px 50px;margin:auto}header{display:flex;gap:18px;justify-content:space-between;align-items:center;flex-wrap:wrap;margin-bottom:24px}.brand{display:flex;gap:14px;align-items:center}.mark{height:48px;width:48px;border:1px solid #338b87;border-radius:15px;display:grid;place-items:center;background:#1a484a;color:var(--teal);font-size:24px;font-weight:800}h1{font-size:23px;letter-spacing:.08em;line-height:1.1;margin:0}h2{font-size:17px;margin:0 0 13px}p{margin:8px 0}.subtitle{color:var(--sub);font-size:12px;letter-spacing:.08em;text-transform:uppercase;margin-top:5px}.statusPill{border:1px solid #496075;background:#1c2b40;padding:9px 14px;border-radius:30px;color:#c3dbec;font-size:13px}.grid{display:grid;grid-template-columns:1.3fr .9fr;gap:16px}.panel,.tile{background:linear-gradient(155deg,#172741,#101c30);border:1px solid var(--line);border-radius:17px;box-shadow:0 10px 30px #07101b35}.panel{padding:19px}.preview{background:#08111e;border-radius:12px;overflow:hidden;aspect-ratio:4/3;display:grid;place-items:center;border:1px solid #293b53;position:relative}.preview img{display:block;width:100%;height:100%;object-fit:contain}.preview span{position:absolute;bottom:10px;left:10px;background:#07101bd9;padding:5px 9px;border-radius:5px;font-size:12px}.small{font-size:12px;color:var(--sub)}.muted{color:var(--sub)}.scores{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.tile{padding:17px}.wide{grid-column:1 / -1}.tileHead{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--sub);font-size:13px}.tile .reading{font-size:22px;font-weight:750;margin:10px 0 4px;letter-spacing:.01em;overflow-wrap:anywhere}.duration{font-size:12px;color:var(--sub)}.dot{width:9px;height:9px;border-radius:50%;background:#93a2b5;display:inline-block;flex-shrink:0}.good{color:var(--teal)!important}.good .dot,.dot.good{background:var(--teal)}.warn{color:var(--amber)!important}.warn .dot,.dot.warn{background:var(--amber)}.bad{color:var(--red)!important}.bad .dot,.dot.bad{background:var(--red)}.section{margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:16px}label{display:block;font-size:13px;color:var(--sub);margin-bottom:6px}input{background:#0a1729;border:1px solid #476079;border-radius:8px;padding:11px 12px;color:var(--txt);width:100%;font:inherit;min-width:0}input:focus{outline:2px solid #4cc8b1;outline-offset:1px}.formRow{display:flex;gap:12px;align-items:end}.field{flex:1;min-width:0}.buttons{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}button{font:600 13px system-ui;border-radius:9px;border:1px solid #397b83;padding:10px 13px;cursor:pointer;background:#1a5159;color:#f4ffff}button.secondary{background:#1a2a42;color:#e3f1ff;border-color:#4b617e}button.danger{border-color:#8a5260;background:#482834}button:disabled{opacity:.45;cursor:progress}button:focus-visible{outline:2px solid #6ff5cf;outline-offset:2px}.hint{border-left:3px solid var(--amber);padding:11px 13px;background:#372b263e;color:#dfc49b;border-radius:5px;font-size:12px;margin-top:15px}.details{font-size:12px;border:1px solid var(--line);background:#0e1a2c;border-radius:9px;padding:10px 12px;margin-top:10px;word-break:break-word}.details summary{cursor:pointer;color:var(--sub)}.progress{height:8px;background:#0b1827;border-radius:20px;overflow:hidden;margin:11px 0}.progress div{height:100%;background:linear-gradient(90deg,#34bbab,#8cf3d0);width:0%;transition:width .2s}.msg{min-height:26px;font-size:13px;color:var(--sub);margin-top:9px}.networkList{display:grid;gap:5px;max-height:185px;overflow:auto;margin-top:8px}.networkList button{background:#10243a;border-color:#334f67;text-align:left;display:flex;justify-content:space-between;gap:12px}.footer{text-align:center;color:#7487a0;font-size:12px;margin-top:25px}code{font:12px ui-monospace,Consolas,monospace;color:#cae5ed}.hidden{display:none!important}@media(max-width:900px){.grid{grid-template-columns:1fr}.section{grid-template-columns:1fr}}@media(max-width:540px){h1{font-size:19px}.scores{grid-template-columns:1fr 1fr}.tile .reading{font-size:18px}.container{padding:17px 11px 35px}.panel{padding:15px}}
+</style>
+</head>
+<body>
+<div class="container">
+<header><div class="brand"><div class="mark">S</div><div><h1>S.A.F.E. R.O.A.D.</h1><div class="subtitle">Standalone monitoring · Stage 4</div></div></div><div class="statusPill" id="systemState">Connecting to device…</div></header>
+<div class="grid">
+  <section class="panel"><h2>Camera view <span class="small">· approx. 1 frame/second</span></h2><div class="preview"><img id="camera" alt="Latest camera image" /><span id="cameraState">Waiting for camera…</span></div><p class="small">Camera preview is JPEG snapshots from the running face-detection loop, not a second inference pipeline. Detection continues without this page open.</p></section>
+  <section class="panel"><h2>Monitoring status</h2><p class="small" id="engineState">Checking eye/mouth engine…</p><div class="scores">
+    <div class="tile"><div class="tileHead">Face <i id="faceDot" class="dot"></i></div><div class="reading" id="faceState">—</div><div class="duration">Face presence</div></div>
+    <div class="tile"><div class="tileHead">Eyes <i id="eyeDot" class="dot"></i></div><div class="reading" id="eyeState">—</div><div class="duration" id="eyeTime">—</div></div>
+    <div class="tile"><div class="tileHead">Mouth / yawn-like <i id="mouthDot" class="dot"></i></div><div class="reading" id="mouthState">—</div><div class="duration" id="mouthTime">—</div></div>
+    <div class="tile"><div class="tileHead">Head down <i id="downDot" class="dot"></i></div><div class="reading" id="downState">—</div><div class="duration" id="downTime">—</div></div>
+    <div class="tile"><div class="tileHead">Looking away <i id="awayDot" class="dot"></i></div><div class="reading" id="awayState">—</div><div class="duration" id="awayTime">—</div></div>
+    <div class="tile"><div class="tileHead">Head tilt <i id="tiltDot" class="dot"></i></div><div class="reading" id="tiltState">—</div><div class="duration" id="tiltTime">—</div></div>
+  </div><p class="small">These labels are <b>experimental similarity/2D-pose signals</b>. They are not confirmed drowsiness, gaze, or yawning diagnoses.</p></section>
+</div>
+<div class="section">
+ <section class="panel"><h2>Calibration</h2><div id="calState">Waiting for firmware status…</div><div class="progress"><div id="calProgress"></div></div><div class="small" id="calNote">Sit comfortably with your face well lit. Tap Calibrate when ready.</div><div class="field"><label for="key">Setup access key (hotspot password)</label><input id="key" type="password" autocomplete="new-password" maxlength="19" placeholder="Enter 12345678"></div><div class="buttons"><button id="restart">Calibrate</button><button id="ready" class="secondary hidden" disabled>Ready — capture this pose</button></div><div class="msg" id="calMessage" role="status" aria-live="polite"></div><p class="small">Follow one pose at a time. Tap Ready for each next pose, then use the 4-second countdown to get into position. Completed calibration saves automatically, including individual updates, and loads after restart.</p><div class="buttons" id="stageButtons"></div><details class="details"><summary>Calibration quality and raw measurements</summary><div id="rawMetrics">—</div></details></section>
+ <section class="panel"><h2>Wi-Fi connection</h2><p class="small" id="netInfo">The device always offers its setup hotspot.</p>
+   <p class="small">Wi-Fi changes use the setup access key entered in the Calibration panel.</p>
+   <div class="buttons"><button class="secondary" id="scan">Scan nearby Wi-Fi</button></div><div class="networkList" id="networks" aria-live="polite"></div>
+   <div class="formRow"><div class="field"><label for="ssid">Wi-Fi name (SSID)</label><input id="ssid" maxlength="32" autocomplete="off" placeholder="Your 2.4 GHz home Wi-Fi"></div><div class="field"><label for="pwd">Wi-Fi password</label><input id="pwd" type="password" maxlength="63" autocomplete="new-password" placeholder="8+ characters"></div></div>
+   <div class="buttons"><button id="connect">Save &amp; connect</button><button id="forget" class="danger">Forget Wi-Fi</button></div><div id="netMessage" class="msg" role="status"></div>
+   <div class="hint">Connection is local-only; no cloud, internet, or phone is needed for detection. Setup uses regular HTTP, so enter Wi-Fi credentials only while connected to the device's protected hotspot or a trusted private LAN. Do not expose the device to the public internet.</div>
+ </section>
+</div>
+<p class="footer">S.A.F.E. R.O.A.D. research prototype · Bench testing only · No verified safety alarms, buzzer, or SMS</p>
+</div>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const fmt=ms=>ms>0?(ms/1000).toFixed(1)+'s':'0.0s';
+function text(id,value){$(id).textContent=String(value)}
+function dot(id,kind){$(id).className='dot '+kind}
+function stateKind(state){return state==='UNKNOWN'||state==='UNCERTAIN'||state==='NO FACE'?'':state.includes('CLOSED')||state==='YES'||state==='LEFT'||state==='RIGHT'?'warn':'good'}
+function mouthKind(state){return state==='OPEN-LIKE'?'warn':stateKind(state)}
+let lastStatus=null,loadingStatus=false,loadingFrame=false;
+async function getJSON(url,opts){const r=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(12000),...opts});let o;try{o=await r.json()}catch{throw Error('Invalid response ('+r.status+')')}if(!r.ok)throw Error(o.error||'HTTP '+r.status);return o}
+function update(s){lastStatus=s;const alive=s.age_ms>=0&&s.age_ms<8000;
+  text('systemState',!alive?'Device data stale':s.calibrated?'● Monitoring active':s.calibration_running?'● Calibration in progress':'● Ready to calibrate');
+  text('engineState',s.eye_mouth_engine==='tiny-trained'?'Eye/mouth: trained tiny classifiers running on ESP32':'Eye/mouth: calibration template matching. No trained tiny model installed yet.');
+  text('faceState',s.face?'DETECTED':'NO FACE');dot('faceDot',s.face?'good':'warn');
+  const active=s.face&&s.calibrated;
+  text('eyeState',active?s.eye:'—');text('eyeTime',active?fmt(s.eye_ms):'Awaiting face/calibration');dot('eyeDot',active?stateKind(s.eye):'');
+  text('mouthState',active?s.mouth:'—');text('mouthTime',active?fmt(s.mouth_ms):'Awaiting face/calibration');dot('mouthDot',active?mouthKind(s.mouth):'');
+  text('downState',active?(s.down?'YES':'NO'):'—');text('downTime',active?fmt(s.down_ms):'Awaiting face/calibration');dot('downDot',active?(s.down?'warn':'good'):'');
+  text('awayState',active?s.away:'—');text('awayTime',active?fmt(s.away_ms):'Awaiting face/calibration');dot('awayDot',active?stateKind(s.away):'');
+  text('tiltState',active?s.tilt:'—');text('tiltTime',active?fmt(s.tilt_ms):'Awaiting face/calibration');dot('tiltDot',active?stateKind(s.tilt):'');
+  $('restart').disabled=alive&&s.calibration_running;
+  text('restart',s.calibrated?'Recalibrate all 9 poses':'Calibrate');
+  $('ready').classList.toggle('hidden',!s.calibration_waiting);
+  $('ready').disabled=!alive||!s.calibration_waiting;
+  if(s.calibration_running){
+    text('calState','Pose '+s.calibration_step+' of 9: '+s.calibration_instruction);
+    text('calNote',s.calibration_waiting?'Take your time. Tap Ready to capture this next pose.':s.calibration_preparing?'Get into position — capture starts in '+s.calibration_wait_s+'s':!s.face?'Face not visible. Face the camera to continue.':'Hold still — '+s.calibration_samples+' of '+s.calibration_target+' samples captured');
+    $('calProgress').style.width=Math.min(100,((s.calibration_step-1)+(s.calibration_samples/s.calibration_target))*100/9)+'%';
+  }else if(s.calibrated){
+    text('calState','Calibration complete · monitoring active');
+    text('calNote',s.calibration_saved?'Saved on device. Monitoring resumes automatically after restart. Redo a pose below whenever needed.':'Save failed. Monitoring works this session; recalibrate to retry saving before restart.');
+    $('calProgress').style.width='100%';
+  }else{
+    text('calState','Ready when you are');text('calNote','Face the camera in good light, enter your setup key, then tap Calibrate. Nothing is captured until you start.');$('calProgress').style.width='0%';
+  }
+  for(const btn of $('stageButtons').children)btn.disabled=!alive||!s.calibrated;
+  const q=s.calibration_quality||{};
+  text('rawMetrics',`Eye: ${q.eye?'OK':'UNRELIABLE'} | Mouth: ${q.mouth?'OK':'UNRELIABLE'} | Down: ${q.down?'OK':'UNRELIABLE'} | Yaw L/R: ${q.yaw_left?'OK':'OFF'}/${q.yaw_right?'OK':'OFF'} | Tilt L/R: ${q.tilt_left?'OK':'OFF'}/${q.tilt_right?'OK':'OFF'}\nHead down score: ${Number(s.down_score||0).toFixed(3)} · Yaw displacement: ${Number(s.yaw_delta||0).toFixed(3)} · Roll change: ${Number(s.roll_delta||0).toFixed(1)}°`);
+  text('netInfo',s.wifi_connected?'Connected to '+s.wifi_ssid+' · IP '+(s.wifi_ip||'pending')+' · Setup hotspot: '+s.ap_ssid+' (192.168.4.1)':'Not connected to home Wi-Fi. Setup hotspot: '+s.ap_ssid+' (192.168.4.1)');
+}
+async function poll(){if(loadingStatus)return;loadingStatus=true;try{update(await getJSON('/api/status'))}catch(e){text('systemState','Disconnected: '+e.message);$('restart').disabled=false;text('calMessage','Device unreachable. Connect to its hotspot, refresh this page, then try again.')}finally{loadingStatus=false}}
+function preview(){if(loadingFrame)return;loadingFrame=true;const im=$('camera');im.onload=()=>{text('cameraState','Latest frame · refreshed');loadingFrame=false};im.onerror=()=>{text('cameraState','Preview unavailable');loadingFrame=false};im.src='/api/frame?t='+Date.now()}
+async function post(url,obj,el,msg){const key=$('key').value;if(!key){text(msg,'Enter setup access key 12345678 above, then tap again.');$('key').focus();return}el.disabled=true;text(msg,'Sending…');try{const res=await getJSON(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...obj,key})});text(msg,res.message||(url==='/api/calibration'?'Request accepted. Waiting for the device to update…':'Done.'));await poll()}catch(e){text(msg,e.message)}finally{el.disabled=false;if(lastStatus)update(lastStatus)}}
+$('connect').addEventListener('click',()=>{const ssid=$('ssid').value.trim(),password=$('pwd').value;if(!ssid){text('netMessage','Enter a Wi-Fi name first.');return}if(password.length>0&&password.length<8){text('netMessage','Wi-Fi password must be at least 8 characters.');return}post('/api/wifi',{ssid,password},$('connect'),'netMessage')});
+$('forget').addEventListener('click',()=>{if(confirm('Forget saved Wi-Fi network? The setup hotspot will remain available.'))post('/api/wifi/forget',{},$('forget'),'netMessage')});
+const stageLabels=['Eyes open','Eyes closed','Neutral / mouth closed','Mouth open','Head down','Look left','Look right','Tilt left','Tilt right'];
+stageLabels.forEach((label,i)=>{const btn=document.createElement('button');btn.className='secondary';btn.textContent='Recalibrate '+label;btn.disabled=true;btn.addEventListener('click',()=>post('/api/calibration',{stage:i+1},btn,'calMessage'));$('stageButtons').append(btn)});
+$('restart').addEventListener('click',()=>{if(!lastStatus?.calibrated||confirm('Recalibrate all 9 poses? Your last saved calibration stays on device until the new set is complete.'))post('/api/calibration',{},$('restart'),'calMessage')});
+$('ready').addEventListener('click',()=>post('/api/calibration',{action:'ready'},$('ready'),'calMessage'));
+$('scan').addEventListener('click',async()=>{const btn=$('scan');btn.disabled=true;text('netMessage','Scanning 2.4 GHz networks…');$('networks').replaceChildren();try{const data=await getJSON('/api/scan');for(const net of data.networks||[]){if(!net.ssid)continue;const btn=document.createElement('button');const left=document.createElement('span'),right=document.createElement('span');left.textContent=net.ssid;right.textContent=(net.secured?'🔒 ':'')+net.rssi+' dBm';btn.append(left,right);btn.addEventListener('click',()=>{$('ssid').value=net.ssid;text('netMessage','Selected '+net.ssid)});$('networks').append(btn)}if(!$('networks').children.length)text('netMessage','No networks found. Enter SSID manually.');else text('netMessage','Select a network above.') }catch(e){text('netMessage',e.message)}finally{btn.disabled=false}});
+$('rawMetrics').style.whiteSpace='pre-line';poll();preview();setInterval(poll,1300);setInterval(preview,1800);
+</script>
+</body>
+</html>
