@@ -22,6 +22,7 @@ struct Config {
 };
 struct Item {uint32_t revision;int event;int64_t duration,created;uint8_t channels;};
 static Config config;
+static int hold_ms[5]={1500,3000,2500,2500,2500};
 static uint32_t revision=1;
 static SemaphoreHandle_t mutex=nullptr;
 static QueueHandle_t queue=nullptr;
@@ -69,8 +70,8 @@ struct TlsTransport {
 static std::string event_body(const Item &item){
     char body[512];
     const char *label=item.event<0?"Test notification":event_labels[item.event];
-    snprintf(body,sizeof(body),"SAFE ROAD\nDevice: %s\nEvent: %s\nObserved duration: %lld ms\nDevice uptime: %lld ms\n\nExperimental camera-based monitoring event; not a confirmed drowsiness or yawn diagnosis.\n",
-        device,label,(long long)item.duration,(long long)item.created);
+    snprintf(body,sizeof(body),"SAFE ROAD\nDevice: %s\nEvent: %s\nObserved duration: %.3f seconds\nDevice uptime: %.3f seconds\n\nExperimental camera-based monitoring event; not a confirmed drowsiness or yawn diagnosis.\n",
+        device,label,double(item.duration)/1000.0,double(item.created)/1000.0);
     return body;
 }
 static void send_email(const Config &c,const Item &item){
@@ -131,21 +132,30 @@ bool init(const char *id,std::atomic<bool> *connected){
                (!saved.email||(email_address(saved.user)&&email_address(saved.recipient)&&strlen(saved.password)==16))&&
                (!saved.webhook||https_url(saved.url)))config=saved;
         }
+        int saved_hold[5];size_t hold_size=sizeof(saved_hold);
+        if(nvs_get_blob(handle,"hold_ms",saved_hold,&hold_size)==ESP_OK&&hold_size==sizeof(saved_hold)){
+            bool valid=true;for(int value:saved_hold)valid=valid&&valid_hold_ms(value);
+            if(valid)memcpy(hold_ms,saved_hold,sizeof(hold_ms));
+        }
         nvs_close(handle);
     }
     const bool ok=xTaskCreate(worker,"notifications",10240,nullptr,2,nullptr)==pdPASS;
     started.store(ok);return ok;
 }
+bool local_policy(int *values,uint32_t &events){
+    if(!lock())return false;
+    memcpy(values,hold_ms,sizeof(hold_ms));events=config.events;unlock();return true;
+}
 void reset_episode(){reset_generation.fetch_add(1);}
 void observe(const int64_t durations[5]){
     if(!started.load())return;
     const auto generation=reset_generation.load();if(generation!=seen_generation){gate.reset();seen_generation=generation;}
-    Config c;uint32_t rev;
+    Config c;uint32_t rev;int limits[5];
     if(!lock())return;
-    c=config;rev=revision;unlock();
+    c=config;rev=revision;memcpy(limits,hold_ms,sizeof(limits));unlock();
     const int64_t now=esp_timer_get_time()/1000;
     const uint8_t channels=(c.email?1:0)|(c.webhook?2:0);
-    for(int i=0;i<event_count;i++)if(gate.take(i,durations[i],now,c.cooldown)&&(c.events&(1u<<i))&&channels){
+    for(int i=0;i<event_count;i++)if(gate.take(i,durations[i],now,c.cooldown,limits[i])&&(c.events&(1u<<i))&&channels){
         if(!ready()){if(c.email)result(true,"Offline; monitoring continues");if(c.webhook)result(false,"Offline; monitoring continues");continue;}
         Item item{rev,i,durations[i],now,channels};
         if(xQueueSend(queue,&item,0)!=pdTRUE){if(c.email)result(true,"Notification queue full");if(c.webhook)result(false,"Notification queue full");}
@@ -161,12 +171,12 @@ cJSON *request(cJSON *doc){
     if(!started.load())return error("Notifications unavailable");
     auto *action=cJSON_GetObjectItemCaseSensitive(doc,"action");if(!cJSON_IsString(action))return error("Action required");
     if(!lock())return error("Settings busy; retry");
-    Config next=config;uint32_t rev=revision;unlock();
+    Config next=config;uint32_t rev=revision;int next_hold[5];memcpy(next_hold,hold_ms,sizeof(next_hold));unlock();
     if(!strcmp(action->valuestring,"load")){
         auto *out=cJSON_CreateObject();cJSON_AddBoolToObject(out,"email_enabled",next.email);cJSON_AddBoolToObject(out,"webhook_enabled",next.webhook);
         cJSON_AddStringToObject(out,"email",next.user);cJSON_AddStringToObject(out,"recipient",next.recipient);
         cJSON_AddBoolToObject(out,"password_saved",next.password[0]);cJSON_AddBoolToObject(out,"webhook_saved",next.url[0]);
-        cJSON_AddNumberToObject(out,"events",next.events);cJSON_AddNumberToObject(out,"cooldown",next.cooldown);return out;
+        cJSON_AddNumberToObject(out,"events",next.events);cJSON_AddNumberToObject(out,"cooldown",next.cooldown);cJSON_AddItemToObject(out,"hold_ms",cJSON_CreateIntArray(next_hold,5));return out;
     }
     if(!strcmp(action->valuestring,"test_email")||!strcmp(action->valuestring,"test_webhook")){
         const bool email=!strcmp(action->valuestring,"test_email");
@@ -181,19 +191,26 @@ cJSON *request(cJSON *doc){
        !string(doc,"email",next.user,sizeof(next.user))||!string(doc,"recipient",next.recipient,sizeof(next.recipient))||
        !string(doc,"app_password",next.password,sizeof(next.password),true)||!string(doc,"webhook_url",next.url,sizeof(next.url),true))return error("Invalid settings fields");
     auto *events=cJSON_GetObjectItemCaseSensitive(doc,"events"),*cooldown=cJSON_GetObjectItemCaseSensitive(doc,"cooldown");
-    if(!cJSON_IsNumber(events)||events->valuedouble!=events->valueint||events->valueint<1||events->valueint>31||
+    if(!cJSON_IsNumber(events)||events->valuedouble!=events->valueint||events->valueint<0||events->valueint>31||
        !cJSON_IsNumber(cooldown)||cooldown->valuedouble!=cooldown->valueint||cooldown->valueint<30||cooldown->valueint>3600)return error("Choose events and a cooldown from 30 to 3600 seconds");
     next.events=events->valueint;next.cooldown=cooldown->valueint;
+    auto *holds=cJSON_GetObjectItemCaseSensitive(doc,"hold_ms");
+    if(!cJSON_IsArray(holds)||cJSON_GetArraySize(holds)!=5)return error("Set a hold time for each detection");
+    for(int i=0;i<5;i++){
+        auto *value=cJSON_GetArrayItem(holds,i);
+        if(!cJSON_IsNumber(value)||value->valuedouble!=value->valueint||!valid_hold_ms(value->valueint))return error("Detection hold times must be 0.5 to 60 seconds");
+        next_hold[i]=value->valueint;
+    }
     // Google displays the 16-character app password in groups separated by spaces.
     {size_t n=0;for(size_t i=0;next.password[i];i++)if(next.password[i]!=' ')next.password[n++]=next.password[i];next.password[n]=0;}
     if(next.email&&(!email_address(next.user)||!email_address(next.recipient)||strlen(next.password)!=16))return error("Gmail needs sender, one recipient, and a 16-character app password");
     if(next.webhook&&!https_url(next.url))return error("Webhook must be an HTTPS URL without user info or fragment");
     nvs_handle_t handle;esp_err_t err=nvs_open("sr_alerts",NVS_READWRITE,&handle);
     if(err!=ESP_OK)return error("Could not open saved settings");
-    err=nvs_set_blob(handle,"config",&next,sizeof(next));if(err==ESP_OK)err=nvs_commit(handle);nvs_close(handle);
+    err=nvs_set_blob(handle,"config",&next,sizeof(next));if(err==ESP_OK)err=nvs_set_blob(handle,"hold_ms",next_hold,sizeof(next_hold));if(err==ESP_OK)err=nvs_commit(handle);nvs_close(handle);
     if(err!=ESP_OK)return error("Could not save notification settings");
     if(!lock())return error("Settings saved; reload to confirm");
-    config=next;++revision;unlock();reset_episode();
+    config=next;memcpy(hold_ms,next_hold,sizeof(hold_ms));++revision;unlock();reset_episode();
     auto *out=cJSON_CreateObject();cJSON_AddStringToObject(out,"message","Notification settings saved on device");return out;
 }
 void status(cJSON *doc){

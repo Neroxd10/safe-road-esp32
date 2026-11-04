@@ -576,8 +576,8 @@
   "build": {
     "passed": true,
     "target": "esp32s3",
-    "firmware_bytes": 3934944,
-    "sha256": "1f02c5392b3a248b42235cc797a94c07e39f21a21fb7a2c9df5542eed75ce2d3",
+    "firmware_bytes": 3952096,
+    "sha256": "c42c7211905a2cdd823cf79173ae248d3c62e78908458aff71af43dd85d3efa0",
     "geometry_decision_tests": "passed",
     "dashboard_tests": "passed",
     "embedded_device_output_checks": "pending; both single/multi-core required on boot",
@@ -643,5 +643,50 @@
     "phone_browsing": "User confirmed browsing works through SAFE_ROAD hotspot",
     "instruction": "Wait for HOTSPOT SHARING READY, then rejoin SAFE_ROAD to refresh DNS if needed",
     "calibration_and_hotspot_password_changed": false
+  },
+  "oled_buzzer": {
+    "build": "passed",
+    "policy_tests": "passed",
+    "dashboard_regression": "passed",
+    "display": "SH1106 128x64; addresses 0x3c/0x3d; I2C 0",
+    "default_gpio": {
+      "sda": 1,
+      "scl": 2,
+      "buzzer": 21
+    },
+    "pin_availability": "awaiting user confirmation",
+    "module_supply_rating": "not established by screenshot; verify before wiring",
+    "buzzer": "passive low-trigger, 2400 Hz LEDC timer 1/channel 1",
+    "no_face_stale_calibrating": "silent",
+    "hardware_test": "pending",
+    "internet": "verified HTTPS probe every 30 seconds; independent low-priority task"
+  },
+  "configurable_alert_times": {
+    "build": "passed",
+    "host_custom_boundary_and_disabled_event_tests": "passed",
+    "dashboard_form_tests": "passed",
+    "range_seconds": [
+      0.5,
+      60
+    ],
+    "shared_by": [
+      "buzzer",
+      "OLED alert indication",
+      "email",
+      "webhook"
+    ],
+    "nvs_key": "sr_alerts/hold_ms",
+    "existing_config_blob_unchanged": true,
+    "restart_persistence_on_board": "pending"
+  },
+  "hotspot_configuration": {
+    "build": "passed",
+    "boundary_tests": "passed",
+    "dashboard_tests": "passed",
+    "nvs_blob": "safe_road/ap_settings",
+    "blank_password": "keep existing",
+    "apply": "restart after 2.5 seconds",
+    "device_reconnection_and_persistence": "pending board test",
+    "saved_calibration": "retained"
   }
 }

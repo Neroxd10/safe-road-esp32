@@ -12,6 +12,8 @@ struct Transport {
 };
 int main(){
  using namespace alerts;
+ Gate custom;assert(!custom.take(0,1999,10000,60,2000));assert(custom.take(0,2000,10001,60,2000));
+ assert(valid_hold_ms(500)&&valid_hold_ms(60000));assert(!valid_hold_ms(499)&&!valid_hold_ms(60001));
  Gate g;
  assert(!g.take(0,1499,10000,60));assert(g.take(0,1500,10500,60));assert(!g.take(0,3000,12000,60));
  assert(!g.take(0,0,13000,60));assert(!g.take(0,1500,14000,60));assert(!g.take(0,90000,100000,60));

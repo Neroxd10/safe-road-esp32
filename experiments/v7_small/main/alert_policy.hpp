@@ -7,12 +7,13 @@ constexpr int event_count=5;
 constexpr int thresholds[event_count]={1500,3000,2500,2500,2500};
 constexpr const char *event_names[event_count]={"eyes_closed","mouth_open","head_down","looking_away","head_tilt"};
 constexpr const char *event_labels[event_count]={"Eyes closed-like","Mouth open-like","Head down-like","Looking away-like","Head tilt-like"};
+inline bool valid_hold_ms(int value){return value>=500&&value<=60000;}
 struct Gate {
     bool fired[event_count]={};
     int64_t last[event_count]={};
-    bool take(int event,int64_t duration,int64_t now,int cooldown_seconds){
+    bool take(int event,int64_t duration,int64_t now,int cooldown_seconds,int threshold_ms=-1){
         if(duration<=0){fired[event]=false;return false;}
-        if(duration<thresholds[event]||fired[event])return false;
+        if(duration<(threshold_ms<0?thresholds[event]:threshold_ms)||fired[event])return false;
         fired[event]=true;
         if(last[event]&&now-last[event]<int64_t(cooldown_seconds)*1000)return false;
         last[event]=now;return true;

@@ -2,7 +2,7 @@
 // ESP32-S3 N16R8 + OV5640, ESP-IDF 5.5.x / human_face_detect 0.5.2
 // MediaPipe detector and smaller 468-landmark geometry experiment.
 // Head orientation remains a calibrated 2D proxy, not MediaPipe's 3D transform.
-// Experimental local monitoring; no buzzer, SMS or driving decisions.
+// Experimental local monitoring; local buzzer and remote alerts; no driving decisions.
 
 
 #include <algorithm>
@@ -35,6 +35,9 @@
 #include "alerts.hpp"
 #include "esp_netif_sntp.h"
 #include "network_policy.hpp"
+#include "hardware.hpp"
+#include "ap_settings.hpp"
+#include "esp_system.h"
 #include "dl_image_jpeg.hpp"
 
 
@@ -96,7 +99,7 @@ static const char *sharing_message(Sharing state){
     }
 }
 static char g_ap_ssid[33] = {};
-static char g_ap_password[20] = {};
+static char g_ap_password[64] = {};
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 extern const uint8_t index_html_end[] asm("_binary_index_html_end");
 
@@ -460,11 +463,11 @@ static void track_frame(const Pose &p, bool have_eyes, bool have_mouth)
     ESP_LOGI(TAG,"lookingAway~=%s (%lldms) headTilt~=%s (%lldms,rollDelta=%.1f deg) yawDelta=%.3f",
         look_left?"LEFT":(look_right?"RIGHT":"no"),(long long)away_ms,
         tilt_left?"LEFT":(tilt_right?"RIGHT":"no"),(long long)tilt_ms,droll,dyaw);
-    if (mouth_ms>=3000) ESP_LOGW(TAG,"MOUTH OPEN-LIKE >=3s: may be yawning, speaking, etc. NOT validated.");
-    if (down_ms>=2500) ESP_LOGW(TAG,"HEAD DOWN-LIKE >=2.5s: unverified 2D head proxy.");
-    if (away_ms>=2500) ESP_LOGW(TAG,"LOOKING AWAY-LIKE >=2.5s: unverified yaw proxy.");
-    if (tilt_ms>=2500) ESP_LOGW(TAG,"SIDE TILT-LIKE >=2.5s: unverified roll proxy.");
-    if (eye_ms>=1500) ESP_LOGW(TAG,"EYES CLOSED-LIKE >=1.5s: experimental only, no alarm.");
+    int limits[5];uint32_t enabled=0;
+    if(alerts::local_policy(limits,enabled))for(int i=0;i<5;i++){
+        if((enabled&(1u<<i))&&durations[i]>=limits[i])
+            ESP_LOGW(TAG,"Configured detection %d held >=%dms: experimental alert",i+1,limits[i]);
+    }
 }
 
 static void accept_sample(const Pose &p, bool have_eyes, bool have_mouth)
@@ -498,7 +501,7 @@ static void accept_sample(const Pose &p, bool have_eyes, bool have_mouth)
         check_calibration();
         calibration_saved=save_calibration();
         ESP_LOGW(TAG,"CALIBRATION COMPLETE. Return to NEUTRAL and try each motion SEPARATELY.");
-        ESP_LOGW(TAG,"Prototypes only: no buzzer, SMS, or safety decisions. Use dashboard buttons to recalibrate.");
+        ESP_LOGW(TAG,"Experimental local buzzer and remote alerts enabled. Use dashboard buttons to recalibrate.");
     }
 }
 
@@ -677,6 +680,8 @@ static esp_err_t status_handler(httpd_req_t *req) {
     const Sharing sharing=g_sharing.load();
     cJSON_AddBoolToObject(doc,"internet_sharing",sharing==Sharing::Ready&&g_wifi_connected.load());
     cJSON_AddStringToObject(doc,"sharing_status",sharing_message(sharing));
+    cJSON_AddBoolToObject(doc,"oled_ready",hardware::oled_ready());
+    cJSON_AddBoolToObject(doc,"internet_verified",g_wifi_connected.load()&&hardware::internet_recent());
     alerts::status(doc);
     cJSON_AddBoolToObject(doc,"face",t.face);
     cJSON_AddStringToObject(doc,"engine_error",t.engine_error);
@@ -942,9 +947,38 @@ static esp_err_t notifications_handler(httpd_req_t *req){
     const bool failed=response&&cJSON_GetObjectItemCaseSensitive(response,"error");
     return json_reply(req,response,failed?400:200);
 }
+static std::atomic<bool> g_hotspot_restart{false};
+static void apply_hotspot_task(void *){
+    // Wait for the HTTP response to reach the client, then reload saved config.
+    vTaskDelay(pdMS_TO_TICKS(2500));esp_restart();
+}
+static esp_err_t hotspot_handler(httpd_req_t *req){
+    cJSON *doc=post_json(req);
+    if(!doc)return error_json(req,"Invalid JSON",400);
+    const auto *name=cJSON_GetObjectItemCaseSensitive(doc,"ssid");
+    const auto *password=cJSON_GetObjectItemCaseSensitive(doc,"password");
+    hotspot::Settings settings;
+    if(!cJSON_IsString(name)||!cJSON_IsString(password)||strlen(name->valuestring)>32||strlen(password->valuestring)>63){
+        cJSON_Delete(doc);return error_json(req,"Hotspot name must be 1-32 bytes and password 8-63 characters",400);
+    }
+    snprintf(settings.ssid,sizeof(settings.ssid),"%s",name->valuestring);
+    snprintf(settings.password,sizeof(settings.password),"%s",password->valuestring[0]?password->valuestring:g_ap_password);
+    cJSON_Delete(doc);
+    if(!hotspot::valid(settings))return error_json(req,"Use a name of 1-32 bytes and password of 8-63 printable characters",400);
+    if(g_hotspot_restart.exchange(true))return error_json(req,"Hotspot change already pending",409);
+    nvs_handle_t handle;esp_err_t err=nvs_open("safe_road",NVS_READWRITE,&handle);
+    if(err==ESP_OK){err=nvs_set_blob(handle,"ap_settings",&settings,sizeof(settings));if(err==ESP_OK)err=nvs_commit(handle);nvs_close(handle);}
+    if(err!=ESP_OK){g_hotspot_restart.store(false);return error_json(req,"Could not save hotspot settings",503);}
+    if(xTaskCreate(apply_hotspot_task,"ap_restart",2048,nullptr,2,nullptr)!=pdPASS){
+        g_hotspot_restart.store(false);return error_json(req,"Settings saved; manually restart the board to apply",503);
+    }
+    cJSON *response=cJSON_CreateObject();
+    cJSON_AddStringToObject(response,"message","Saved. Device restarts in 2 seconds; reconnect using the new hotspot name and password, then open 192.168.4.1.");
+    return json_reply(req,response);
+}
 static void start_http() {
     httpd_config_t config=HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers=9;
+    config.max_uri_handlers=10;
     config.stack_size=8192;
     config.recv_wait_timeout=7;
     config.send_wait_timeout=7;
@@ -958,18 +992,10 @@ static void start_http() {
         {.uri="/api/wifi",.method=HTTP_POST,.handler=wifi_handler,.user_ctx=nullptr},
         {.uri="/api/wifi/forget",.method=HTTP_POST,.handler=forget_wifi_handler,.user_ctx=nullptr},
         {.uri="/api/calibration",.method=HTTP_POST,.handler=restart_handler,.user_ctx=nullptr},
+        {.uri="/api/hotspot",.method=HTTP_POST,.handler=hotspot_handler,.user_ctx=nullptr},
         {.uri="/api/notifications",.method=HTTP_POST,.handler=notifications_handler,.user_ctx=nullptr},
     };
     for (const auto &uri:routes) ESP_ERROR_CHECK(httpd_register_uri_handler(srv,&uri));
-}
-static void load_or_create_ap_password() {
-    // Fixed hotspot password requested for this prototype.
-    strcpy(g_ap_password,"12345678");
-    nvs_handle_t handle;
-    ESP_ERROR_CHECK(nvs_open("safe_road",NVS_READWRITE,&handle));
-    ESP_ERROR_CHECK(nvs_set_str(handle,"ap_pass",g_ap_password));
-    ESP_ERROR_CHECK(nvs_commit(handle));
-    nvs_close(handle);
 }
 static void start_network() {
     esp_err_t err=nvs_flash_init();
@@ -979,7 +1005,6 @@ static void start_network() {
         err=nvs_flash_init();
     }
     ESP_ERROR_CHECK(err);
-    load_or_create_ap_password();
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     g_ap_netif=esp_netif_create_default_wifi_ap();
@@ -992,6 +1017,15 @@ static void start_network() {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     uint8_t mac[6]; ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_AP,mac));
     snprintf(g_ap_ssid,sizeof(g_ap_ssid),"SAFE_ROAD_%02X%02X%02X",mac[3],mac[4],mac[5]);
+    strcpy(g_ap_password,"12345678");
+    nvs_handle_t handle;
+    if(nvs_open("safe_road",NVS_READONLY,&handle)==ESP_OK){
+        hotspot::Settings saved;size_t size=sizeof(saved);
+        if(nvs_get_blob(handle,"ap_settings",&saved,&size)==ESP_OK&&size==sizeof(saved)&&hotspot::valid(saved)){
+            memcpy(g_ap_ssid,saved.ssid,sizeof(g_ap_ssid));memcpy(g_ap_password,saved.password,sizeof(g_ap_password));
+        }
+        nvs_close(handle);
+    }
     wifi_config_t ap={};
     strcpy(reinterpret_cast<char *>(ap.ap.ssid),g_ap_ssid);
     strcpy(reinterpret_cast<char *>(ap.ap.password),g_ap_password);
@@ -1006,11 +1040,22 @@ static void start_network() {
     start_http();
     ESP_LOGW(TAG,"===== SETUP ACCESS =====");
     ESP_LOGW(TAG,"Wi-Fi name: %s",g_ap_ssid);
-    ESP_LOGW(TAG,"Wi-Fi password: %s",g_ap_password);
+    ESP_LOGW(TAG,"Hotspot password configured (not logged)");
     ESP_LOGW(TAG,"Dashboard: http://192.168.4.1");
     xTaskCreate(connection_task,"wifi_retry",3072,nullptr,3,nullptr);
 }
 
+static bool hardware_snapshot(hardware::Snapshot &out){
+    if(xSemaphoreTake(g_telemetry_mutex,pdMS_TO_TICKS(5))!=pdTRUE)return false;
+    const auto &t=g_telemetry;
+    out.face=t.face;out.monitoring=t.calibrated;out.calibrating=t.calibration_running;out.waiting=t.calibration_waiting;
+    out.stage=t.stage;out.samples=t.samples;
+    out.age_ms=t.update_us?((esp_timer_get_time()-t.update_us)/1000):-1;
+    out.durations[0]=t.eye_ms;out.durations[1]=t.mouth_ms;out.durations[2]=t.down_ms;out.durations[3]=t.away_ms;out.durations[4]=t.tilt_ms;
+    memcpy(out.eye,t.eye,sizeof(out.eye));out.eye[sizeof(out.eye)-1]=0;
+    memcpy(out.mouth,t.mouth,sizeof(out.mouth));out.mouth[sizeof(out.mouth)-1]=0;
+    xSemaphoreGive(g_telemetry_mutex);out.wifi=g_wifi_connected.load();return true;
+}
 extern "C" void app_main(void)
 {
     ESP_LOGI(TAG,"S.A.F.E. R.O.A.D. / SMALL 468-point camera monitoring EXPERIMENT");
@@ -1022,6 +1067,7 @@ extern "C" void app_main(void)
     if (!g_telemetry_mutex || !g_frame_mutex) {ESP_LOGE(TAG,"Mutex allocation failed");return;}
     if (start_camera()!=ESP_OK) {ESP_LOGE(TAG,"Camera initialization failed");return;}
     start_network();
+    hardware::init(hardware_snapshot);
     esp_sntp_config_t time_config=ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     if(esp_netif_sntp_init(&time_config)!=ESP_OK)ESP_LOGW(TAG,"Internet time sync could not start; TLS notifications may fail");
     if(!alerts::init(g_ap_ssid,&g_wifi_connected))ESP_LOGE(TAG,"Cannot start background notifications");

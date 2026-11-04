@@ -29,18 +29,19 @@ fieldset,.grid>*,.section>*{min-width:0}fieldset{width:100%}.small,.duration{ove
    <div class="buttons"><button class="secondary" id="scan">Scan nearby Wi-Fi</button></div><div class="networkList" id="networks" aria-live="polite"></div>
    <div class="formRow"><div class="field"><label for="ssid">Wi-Fi name (SSID)</label><input id="ssid" maxlength="32" autocomplete="off" placeholder="Your 2.4 GHz home Wi-Fi"></div><div class="field"><label for="pwd">Wi-Fi password</label><input id="pwd" type="password" maxlength="63" autocomplete="new-password" placeholder="8+ characters"></div></div>
    <div class="buttons"><button id="connect">Save &amp; connect</button><button id="forget" class="danger">Forget Wi-Fi</button></div><div id="netMessage" class="msg" role="status"></div>
+<h2 class="settingsTitle">Device hotspot</h2><p class="small" id="hotspotCurrent">Checking current hotspot…</p><div class="formRow"><div class="field"><label for="apName">Hotspot name (SSID)</label><input id="apName" maxlength="32" autocomplete="off" placeholder="New hotspot name"></div><div class="field"><label for="apPassword">Hotspot password</label><input id="apPassword" type="password" maxlength="63" autocomplete="new-password" placeholder="Leave blank to keep current password"></div></div><p class="small">Apply saves the settings and restarts the device. Reconnect using the new name/password. Saved calibration is retained.</p><div class="buttons"><button id="applyHotspot">Save &amp; apply hotspot</button></div><div class="msg" id="hotspotMessage" role="status" aria-live="polite"></div>
 <h2 class="settingsTitle">Notifications</h2><p id="deliveryNetwork" class="small">Checking connection…</p><button id="loadAlerts" class="secondary">Load saved settings</button><fieldset id="alertFields" disabled>
 <div class="checks"><label><input id="emailEnabled" type="checkbox">Gmail email</label><label><input id="webhookEnabled" type="checkbox">Webhook</label></div>
 <div class="formRow"><div class="field"><label for="emailFrom">Gmail sender</label><input id="emailFrom" type="email" maxlength="95" autocomplete="off" placeholder="you@gmail.com"></div><div class="field"><label for="emailTo">Send alerts to</label><input id="emailTo" type="email" maxlength="95" autocomplete="off" placeholder="recipient@example.com"></div></div>
 <div class="field"><label for="appPassword">Gmail app password</label><input id="appPassword" type="password" maxlength="32" autocomplete="new-password" placeholder="16-character app password"></div><p class="small">Uses smtp.gmail.com:465 with TLS. Enable Google 2-Step Verification and create an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer">app password</a>. Enter that here. Leave blank to keep a saved password.</p>
 <div class="field"><label for="webhookUrl">Webhook URL · optional</label><input id="webhookUrl" type="password" maxlength="511" autocomplete="off" placeholder="https://…"></div><p class="small">Sends JSON over HTTPS. Leave blank to keep a saved URL.</p>
-<p>Notify me about</p><div class="checks"><label><input id="eventEyes" type="checkbox">Eyes closed ≥1.5s</label><label><input id="eventMouth" type="checkbox">Mouth open ≥3s</label><label><input id="eventDown" type="checkbox">Head down ≥2.5s</label><label><input id="eventAway" type="checkbox">Looking away ≥2.5s</label><label><input id="eventTilt" type="checkbox">Head tilt ≥2.5s</label></div>
-<div class="field"><label for="cooldown">Minimum seconds between alerts of the same type</label><input id="cooldown" type="number" min="30" max="3600" value="60"></div><p class="small">One alert per sustained event; it must end before another is sent.</p>
+<p>Notify me about</p><div class="checks"><label><input id="eventEyes" type="checkbox">Eyes closed</label><label><input id="eventMouth" type="checkbox">Mouth open</label><label><input id="eventDown" type="checkbox">Head down</label><label><input id="eventAway" type="checkbox">Looking away</label><label><input id="eventTilt" type="checkbox">Head tilt</label></div>
+<p class="small">Hold time before alerting (seconds). These times and event selections apply to the buzzer, email and webhook.</p><div class="checks"><label>Eyes closed<input id="hold0" type="number" min="0.5" max="60" step="0.1" value="2.5" style="width:80px"></label><label>Mouth open<input id="hold1" type="number" min="0.5" max="60" step="0.1" value="2.5" style="width:80px"></label><label>Head down<input id="hold2" type="number" min="0.5" max="60" step="0.1" value="2.5" style="width:80px"></label><label>Looking away<input id="hold3" type="number" min="0.5" max="60" step="0.1" value="2.5" style="width:80px"></label><label>Head tilt<input id="hold4" type="number" min="0.5" max="60" step="0.1" value="2.5" style="width:80px"></label></div><div class="field"><label for="cooldown">Minimum seconds between alerts of the same type</label><input id="cooldown" type="number" min="30" max="3600" value="60"></div><p class="small">One alert per sustained event; it must end before another is sent.</p>
 <div class="buttons"><button id="saveAlerts">Save notifications</button><button id="testEmail" class="secondary">Test email</button><button id="testWebhook" class="secondary">Test webhook</button></div></fieldset><div id="alertMessage" class="msg" role="status" aria-live="polite"></div>
 <div class="delivery"><p>Email: <span id="emailDelivery">Not sent yet</span></p><p>Webhook: <span id="webhookDelivery">Not sent yet</span></p></div><p class="small">Settings save on the device. Enter credentials through its protected hotspot or a trusted LAN.</p>
  </details>
 </div>
-<p class="footer">S.A.F.E. R.O.A.D. research prototype · Bench testing only · Experimental email/webhook alerts · No buzzer or SMS</p>
+<p class="footer">S.A.F.E. R.O.A.D. research prototype · Bench testing only · Experimental buzzer/email/webhook alerts</p>
 </div>
 <script>
 'use strict';
@@ -56,7 +57,7 @@ async function getJSON(url,opts){const r=await fetch(url,{cache:'no-store',signa
 function update(s){lastStatus=s;const alive=s.age_ms>=0&&s.age_ms<8000;
   text('systemState',!alive?'Device data stale':s.calibrated?'● Monitoring active':s.calibration_running?'● Calibration in progress':'● Ready to calibrate');
   text('engineState',s.engine_error||('Monitoring on device · '+Math.round(s.inference_ms||0)+' ms'));
-  const notices=s.notifications||{};text('emailDelivery',notices.email_status||'Not sent yet');text('webhookDelivery',notices.webhook_status||'Not sent yet');text('deliveryNetwork',s.wifi_connected?(notices.clock_ready?'Wi-Fi connected · notifications ready':'Wi-Fi connected · syncing clock…'):'Offline · monitoring continues; notifications paused');
+  const notices=s.notifications||{};text('emailDelivery',notices.email_status||'Not sent yet');text('webhookDelivery',notices.webhook_status||'Not sent yet');text('deliveryNetwork',s.wifi_connected?(s.internet_verified?'Internet verified · notifications ready':notices.clock_ready?'Wi-Fi connected · internet not yet verified':'Wi-Fi connected · syncing clock…'):'Offline · monitoring continues; notifications paused');
   const cv=$('landmarkOverlay'),cx=cv.getContext('2d');cx.clearRect(0,0,cv.width,cv.height);if(s.face&&s.overlay){cx.fillStyle='#5be3c4';for(let i=0;i<s.overlay.length;i+=2){cx.beginPath();cx.arc(s.overlay[i]*cv.width,s.overlay[i+1]*cv.height,2,0,Math.PI*2);cx.fill()}}
   text('faceState',s.face?'Detected':'Not found');dot('faceDot',s.face?'good':'warn');
   const active=s.face&&s.calibrated;
@@ -85,6 +86,8 @@ function update(s){lastStatus=s;const alive=s.age_ms>=0&&s.age_ms<8000;
   text('v7Metrics','Detector: '+Number(s.detector_score||0).toFixed(3)+' · Landmark presence: '+Number(s.face_confidence||0).toFixed(3)+' · EAR L/R: '+Number(s.ear_left||0).toFixed(3)+' / '+Number(s.ear_right||0).toFixed(3)+' · Mouth ratio: '+Number(s.mouth_ratio||0).toFixed(3));
   text('perfMetrics','Time ms · detection '+Math.round(s.detector_ms||0)+' · preprocessing '+Math.round(s.preprocess_ms||0)+' · landmarks '+Math.round(s.landmark_ms||0)+' (activation '+Math.round(s.prelu_ms||0)+') · expressions '+Math.round(s.expression_ms||0));
   text('rawMetrics',`Eye: ${q.eye?'OK':'UNRELIABLE'} | Mouth: ${q.mouth?'OK':'UNRELIABLE'} | Down: ${q.down?'OK':'UNRELIABLE'} | Yaw L/R: ${q.yaw_left?'OK':'OFF'}/${q.yaw_right?'OK':'OFF'} | Tilt L/R: ${q.tilt_left?'OK':'OFF'}/${q.tilt_right?'OK':'OFF'}\nHead down score: ${Number(s.down_score||0).toFixed(3)} · Yaw displacement: ${Number(s.yaw_delta||0).toFixed(3)} · Roll change: ${Number(s.roll_delta||0).toFixed(1)}°`);
+  text('hotspotCurrent','Current hotspot: '+(s.ap_ssid||'SAFE_ROAD')+' · 192.168.4.1');
+  if(!$('apName').value)$('apName').value=s.ap_ssid||'';
   text('sharingInfo',s.sharing_status||'Hotspot internet sharing requires the latest firmware.');
   text('netInfo',s.wifi_connected?'Connected to '+s.wifi_ssid+' · IP '+(s.wifi_ip||'pending')+' · Setup hotspot: '+s.ap_ssid+' (192.168.4.1)':'Not connected to home Wi-Fi. Setup hotspot: '+s.ap_ssid+' (192.168.4.1)');
 }
@@ -108,18 +111,28 @@ $('loadAlerts').addEventListener('click',async()=>{
  $('appPassword').value='';$('webhookUrl').value='';
  $('appPassword').placeholder=s.password_saved?'Saved · leave blank to keep':'16-character app password';
  $('webhookUrl').placeholder=s.webhook_saved?'Saved · leave blank to keep':'https://…';
- eventIds.forEach((id,i)=>{$(id).checked=Boolean(s.events&(1<<i))});
+ eventIds.forEach((id,i)=>{$(id).checked=Boolean(s.events&(1<<i));$('hold'+i).value=(s.hold_ms||[1500,3000,2500,2500,2500])[i]/1000});
  $('alertFields').disabled=false;notificationSettingsLoaded=true;text('alertMessage','Settings loaded. Password and webhook URL stay hidden.');
 });
 $('saveAlerts').addEventListener('click',async()=>{
  if(!notificationSettingsLoaded){text('alertMessage','Load saved settings first.');return}
  const events=eventIds.reduce((mask,id,i)=>mask|($(id).checked?(1<<i):0),0);
- const response=await post('/api/notifications',{action:'save',email_enabled:$('emailEnabled').checked,webhook_enabled:$('webhookEnabled').checked,email:$('emailFrom').value.trim(),recipient:$('emailTo').value.trim(),app_password:$('appPassword').value.replace(/\s/g,''),webhook_url:$('webhookUrl').value.trim(),events,cooldown:Number($('cooldown').value)},$('saveAlerts'),'alertMessage');
+ const hold_ms=eventIds.map((_,i)=>Math.round(Number($('hold'+i).value)*1000));
+ if(hold_ms.some(v=>!Number.isFinite(v)||v<500||v>60000)){text('alertMessage','Set each hold time between 0.5 and 60 seconds.');return}
+ const response=await post('/api/notifications',{action:'save',email_enabled:$('emailEnabled').checked,webhook_enabled:$('webhookEnabled').checked,email:$('emailFrom').value.trim(),recipient:$('emailTo').value.trim(),app_password:$('appPassword').value.replace(/\s/g,''),webhook_url:$('webhookUrl').value.trim(),events,hold_ms,cooldown:Number($('cooldown').value)},$('saveAlerts'),'alertMessage');
  if(response){$('appPassword').value='';$('webhookUrl').value='';$('appPassword').placeholder='Leave blank to keep saved password';$('webhookUrl').placeholder='Leave blank to keep saved URL';}
 });
 $('testEmail').addEventListener('click',()=>post('/api/notifications',{action:'test_email'},$('testEmail'),'alertMessage'));
 $('testWebhook').addEventListener('click',()=>post('/api/notifications',{action:'test_webhook'},$('testWebhook'),'alertMessage'));
 
+$('applyHotspot').addEventListener('click',async()=>{
+ const ssid=$('apName').value.trim(),password=$('apPassword').value;
+ if(!ssid||new TextEncoder().encode(ssid).length>32){text('hotspotMessage','Enter a hotspot name of 1-32 bytes.');return}
+ if(password&&(password.length<8||password.length>63||/[^\x20-\x7e]/.test(password))){text('hotspotMessage','Password must be 8-63 printable characters.');return}
+ if(!confirm('Save hotspot settings and restart the device? Reconnect to '+ssid+' afterward.'))return;
+ const button=$('applyHotspot');button.disabled=true;text('hotspotMessage','Saving…');
+ try{const result=await getJSON('/api/hotspot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid,password})});$('apPassword').value='';text('hotspotMessage',result.message)}catch(e){text('hotspotMessage',e.message);button.disabled=false}
+});
 $('rawMetrics').style.whiteSpace='pre-line';poll();preview();setInterval(poll,1300);setInterval(preview,1800);
 </script>
 </body>

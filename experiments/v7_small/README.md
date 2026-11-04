@@ -162,3 +162,89 @@ including its identifier, for example
 returns 404. Save and enable the macro with the same identifier and a notification
 action, then save the complete URL in the dashboard and test. The user confirmed
 this works. No actual device webhook URL or Gmail credential is stored here.
+
+
+## SH1106 OLED and buzzer
+
+The selected 1.3-inch 128x64 I2C display is SH1106. The selected low-trigger
+buzzer module is passive. Firmware defaults are below; verify these GPIOs are
+exposed and unused on your actual board before wiring. Disconnect power first.
+
+| Module pin | ESP32-S3 connection |
+| --- | --- |
+| OLED GND | GND |
+| OLED VCC | 3V3 |
+| OLED SDA | GPIO 1 |
+| OLED SCK / SCL | GPIO 2 |
+| Passive buzzer GND | GND |
+| Passive buzzer VCC | 3V3, only if the actual module is rated to operate at 3.3 V |
+| Passive buzzer I/O / IN | GPIO 21 |
+
+Match the printed labels; OLED header order varies. Do not connect 5 V to GPIO.
+The screenshot does not establish the buzzer board's supply rating: confirm the
+actual module's voltage before powering it. A 5 V-only module may require a
+transistor/level interface; its I/O must not pull the ESP32 signal above 3.3 V.
+These instructions apply to the transistor module, not a bare two-wire buzzer.
+
+OLED uses I2C controller 0 at 100 kHz and probes 0x3c then 0x3d. Camera SCCB uses
+controller 1 (GPIO 4/5). SH1106 page addressing includes the two-column offset.
+Power the display at 3.3 V so its pullups do not raise SDA/SCL above GPIO voltage.
+The display shows Wi-Fi, recently verified internet, monitoring/no-face status,
+calibration stage, eye/mouth state and sustained alert type. It refreshes roughly
+every 750 ms. The internet check uses a certificate-verified HTTPS HEAD request
+to Google's generate_204 endpoint every 30 seconds; a failed/blocked probe means
+unverified, not proof that every internet service is unavailable.
+
+The buzzer uses LEDC timer 1/channel 1 at 2400 Hz for the selected passive module;
+the camera retains timer 0/channel 0. The idle signal is HIGH for low-trigger
+modules. Active-module mode is selectable in `idf.py menuconfig` under SAFE ROAD
+OLED and buzzer, with the GPIO settings. Do not flash GPIO assignments that are
+already used by another peripheral or reserved by your board.
+
+Local sound is independent of notification settings/internet. It repeats short
+bursts while a valid calibrated detection exceeds 1.5 s eyes closed, 3 s mouth
+open, or 2.5 s head down/away/tilt. Calibration, missing faces, and telemetry older
+than 2.5 s silence it. Local hardware uses a separate task; network checks run
+in another low-priority task, so SMTP/HTTP never delays buzzer pulse scheduling.
+The OLED is optional: a missing display logs a warning and monitoring continues.
+If the display is unplugged while running, reboot after reconnecting to retry.
+
+Build and policy tests do not confirm physical wiring, display orientation,
+volume, or module supply compatibility. Hardware operation and concurrent timing
+still require bench testing. No audible startup test is performed automatically.
+
+
+## Editable detection hold times
+
+Under Wi-Fi & notifications, load saved settings, choose event types, set each
+hold time in seconds (0.5–60), and save notifications. These event selections and
+hold times now control the local buzzer/OLED alert indication and email/webhook
+notifications together. Unchecking all events disables detection alerts while
+monitoring continues. The remote-notification cooldown remains 30–3600 seconds;
+it does not change the local buzzer pulse pattern.
+
+Times persist in `sr_alerts/hold_ms`. Existing saved credentials and channel
+settings use the existing unchanged config blob, and old installations without
+hold_ms retain 1.5/3/2.5/2.5/2.5-second defaults. Calibration is unchanged.
+Settings-load returns hold_ms; save requires five integer millisecond values.
+The inference cadence limits timing precision: a 0.5-second value cannot ensure
+that every brief blink will be captured. Restart persistence still needs board
+verification; host tests cover custom boundaries, disabled events and form values.
+
+
+## Configure the device hotspot
+
+Wi-Fi & notifications now includes Device hotspot. Enter a name (1–32 UTF-8
+bytes), and optionally a new password (8–63 printable ASCII characters). Blank
+password retains the current password. Save & apply hotspot persists one versioned
+NVS blob at safe_road/ap_settings and restarts the device after about 2.5 seconds,
+allowing the HTTP confirmation to arrive first. Rejoin the new SSID using its
+password and reopen http://192.168.4.1. Monitoring pauses during the restart and
+resumes with saved calibration. Home Wi-Fi and notification settings are retained.
+The default remains SAFE_ROAD_xxxxxx / 12345678 until a custom configuration is
+saved. Firmware no longer overwrites a saved custom password at boot or prints it
+to serial. Hotspot configuration does not require an access key, matching the
+other dashboard controls. Saved passwords are never returned by the API.
+
+POST /api/hotspot accepts ssid and password. SSID/password boundary and form tests
+pass; actual reconnection and power-cycle persistence still require board testing.

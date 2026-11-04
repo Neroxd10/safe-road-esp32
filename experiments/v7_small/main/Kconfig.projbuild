@@ -1,0 +1,14 @@
+menu "SAFE ROAD OLED and buzzer"
+config SAFE_ROAD_OLED_SDA
+    int "OLED SDA GPIO"
+    default 1
+config SAFE_ROAD_OLED_SCL
+    int "OLED SCL GPIO"
+    default 2
+config SAFE_ROAD_BUZZER_GPIO
+    int "Buzzer I/O GPIO"
+    default 21
+config SAFE_ROAD_BUZZER_ACTIVE
+    bool "Use active buzzer instead of selected passive module"
+    default n
+endmenu
