@@ -1,5 +1,7 @@
 # SAFE ROAD firmware
 
+[Full setup, wiring, troubleshooting, and source code guide](docs/GUIDE.md)
+
 ESP32-S3 N16R8 firmware for the OV5640 camera, SH1106 OLED and passive buzzer.
 Face monitoring and buzzer alerts run on the ESP32. The dashboard provides
 camera preview, calibration, Wi-Fi setup, email and webhook settings.
@@ -19,14 +21,41 @@ needed. Saved calibration and settings use the same flash partitions as the
 previous smaller firmware. Use Wi-Fi & notifications to configure the hotspot,
 email and webhooks, and the events and hold times that trigger alerts.
 
-| Module pin | ESP32-S3 pin |
-| --- | --- |
-| OLED SDA | GPIO 41 |
-| OLED SCK/SCL | GPIO 42 |
-| Buzzer I/O | GPIO 21 |
-| Hotspot reset button | GPIO 14 to GND |
-| Both VCC | 3V3 |
-| Both GND | GND |
+```mermaid
+flowchart LR
+  subgraph ESP["ESP32-S3"]
+    P["3V3"]
+    G["GND"]
+    D["GPIO 41"]
+    C["GPIO 42"]
+    B["GPIO 21"]
+    R["GPIO 14"]
+  end
+  subgraph OLED["SH1106 OLED"]
+    OV["VCC"]
+    OG["GND"]
+    OD["SDA"]
+    OC["SCK / SCL"]
+  end
+  subgraph BUZZ["Passive buzzer module"]
+    BV["VCC"]
+    BG["GND"]
+    BI["I/O / IN"]
+  end
+  subgraph RESET["Normally open reset button"]
+    RT["Terminal 1"]
+    RG["Terminal 2"]
+  end
+  P --- OV
+  P --- BV
+  G --- OG
+  G --- BG
+  G --- RG
+  D --- OD
+  C --- OC
+  B --- BI
+  R --- RT
+```
 
 This prototype provides experimental camera-based alerts. Firmware source and
 runtime model files live in main/, bundled ESP-IDF components in
