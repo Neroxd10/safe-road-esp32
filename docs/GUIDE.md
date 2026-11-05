@@ -101,13 +101,7 @@ seconds each for head down, looking away and head tilt. You can set each to
 and works offline. Remote alerts use a per-event cooldown and run in a worker
 separate from camera processing. The OLED displays one active alert at a time.
 
-- **Gmail** uses SMTP over TLS on port 465. Enter the sender, recipient and a
-  Gmail app password, save settings, then tap **Test email**.
-- **Webhook** sends a JSON POST to the saved HTTPS URL. For MacroDroid, include
-  the trigger identifier, such as
-  `https://trigger.macrodroid.com/<device-id>/safe_road`. Save, then tap
-  **Test webhook**. The JSON includes event type, device, duration and uptime.
-  Numeric duration/uptime fields use milliseconds. The message text uses seconds.
+For step-by-step setup, see [Gmail SMTP and MacroDroid webhooks](NOTIFICATIONS.md).
 
 The OLED rotates the connected Wi-Fi name, internet verification, and enabled
 email/webhook channels. Internet verification uses a certificate-checked HTTPS

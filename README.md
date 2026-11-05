@@ -2,6 +2,8 @@
 
 [Full setup, wiring, troubleshooting, and source code guide](docs/GUIDE.md)
 
+[Gmail SMTP and MacroDroid webhook setup](docs/NOTIFICATIONS.md)
+
 ESP32-S3 N16R8 firmware for the OV5640 camera, SH1106 OLED and passive buzzer.
 Face monitoring and buzzer alerts run on the ESP32. The dashboard provides
 camera preview, calibration, Wi-Fi setup, email and webhook settings.
