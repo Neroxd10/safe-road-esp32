@@ -213,6 +213,13 @@ cJSON *request(cJSON *doc){
     config=next;memcpy(hold_ms,next_hold,sizeof(hold_ms));++revision;unlock();reset_episode();
     auto *out=cJSON_CreateObject();cJSON_AddStringToObject(out,"message","Notification settings saved on device");return out;
 }
+bool enabled_channels(bool &email,bool &webhook){
+    if(!started.load()||!lock())return false;
+    email=config.email;
+    webhook=config.webhook;
+    unlock();
+    return true;
+}
 void status(cJSON *doc){
     if(!started.load()||!lock())return;
     auto *out=cJSON_AddObjectToObject(doc,"notifications");

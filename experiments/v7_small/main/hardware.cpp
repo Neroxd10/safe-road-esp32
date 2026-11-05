@@ -7,6 +7,7 @@
 #include "driver/ledc.h"
 #include "driver/gpio.h"
 #include "esp_http_client.h"
+#include "esp_wifi.h"
 #include "esp_crt_bundle.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -16,12 +17,16 @@
 #include <initializer_list>
 #include <cstring>
 #include <cstdio>
+#include <ctime>
 namespace hardware {
 static ReadSnapshot read_snapshot=nullptr;
 static i2c_master_bus_handle_t bus=nullptr;
 static i2c_master_dev_handle_t oled=nullptr;
 static std::atomic<bool> display_ok{false};
 static std::atomic<int64_t> internet_at{0};
+static std::atomic<unsigned> internet_generation{0};
+static std::atomic<unsigned> verified_generation{0};
+static std::atomic<bool> probe_failed{false};
 static bool buzzer_ok=false;
 static constexpr int pin=CONFIG_SAFE_ROAD_BUZZER_GPIO;
 static_assert(CONFIG_SAFE_ROAD_OLED_SDA!=CONFIG_SAFE_ROAD_OLED_SCL);
@@ -35,15 +40,48 @@ static void init_oled(){
  // Camera SCCB uses port 1 in this build. OLED uses the other controller.
  cfg.i2c_port=I2C_NUM_0;cfg.sda_io_num=gpio_num_t(CONFIG_SAFE_ROAD_OLED_SDA);cfg.scl_io_num=gpio_num_t(CONFIG_SAFE_ROAD_OLED_SCL);
  cfg.clk_source=I2C_CLK_SRC_DEFAULT;cfg.glitch_ignore_cnt=7;cfg.flags.enable_internal_pullup=true;
- if(i2c_new_master_bus(&cfg,&bus)!=ESP_OK){ESP_LOGW("HARDWARE","OLED bus unavailable");return;}
- for(uint8_t address:{uint8_t(0x3c),uint8_t(0x3d)}){
-  if(i2c_master_probe(bus,address,40)!=ESP_OK)continue;
-  i2c_device_config_t device={};device.dev_addr_length=I2C_ADDR_BIT_LEN_7;device.device_address=address;device.scl_speed_hz=100000;
-  if(i2c_master_bus_add_device(bus,&device,&oled)==ESP_OK)break;
+ const esp_err_t bus_result=i2c_new_master_bus(&cfg,&bus);
+ if(bus_result!=ESP_OK){
+  ESP_LOGW("HARDWARE","OLED bus unavailable (SDA=%d SCL=%d): %s",cfg.sda_io_num,cfg.scl_io_num,esp_err_to_name(bus_result));
+  return;
  }
- const uint8_t setup[]={0xae,0xd5,0x80,0xa8,0x3f,0xd3,0,0x40,0xad,0x8b,0xa1,0xc8,0xda,0x12,0x81,0x7f,0xd9,0x22,0xdb,0x35,0xa4,0xa6,0xaf};
- display_ok.store(command(setup,sizeof(setup)));
- ESP_LOGI("HARDWARE","SH1106 %s; SDA=%d SCL=%d",display_ok.load()?"ready":"not found",CONFIG_SAFE_ROAD_OLED_SDA,CONFIG_SAFE_ROAD_OLED_SCL);
+ vTaskDelay(pdMS_TO_TICKS(100));
+ ESP_LOGI("HARDWARE","OLED diagnostics: I2C0 SDA=%d SCL=%d, configured driver SH1106",cfg.sda_io_num,cfg.scl_io_num);
+ for(uint8_t address:{uint8_t(0x3c),uint8_t(0x3d)}){
+  const esp_err_t probe=i2c_master_probe(bus,address,40);
+  ESP_LOGI("HARDWARE","OLED probe 0x%02X: %s",unsigned(address),probe==ESP_OK?"ACK":esp_err_to_name(probe));
+  if(probe!=ESP_OK)continue;
+  i2c_device_config_t device={};device.dev_addr_length=I2C_ADDR_BIT_LEN_7;device.device_address=address;device.scl_speed_hz=100000;
+  const esp_err_t added=i2c_master_bus_add_device(bus,&device,&oled);
+  if(added!=ESP_OK){
+   ESP_LOGW("HARDWARE","OLED address responded but device setup failed: %s",esp_err_to_name(added));
+   return;
+  }
+  ESP_LOGI("HARDWARE","OLED address 0x%02X responds; address does not identify controller",unsigned(address));
+  break;
+ }
+ if(!oled){
+  unsigned found=0;
+  for(unsigned address=0x08;address<=0x77;address++){
+   if(address==0x3c||address==0x3d)continue;
+   const esp_err_t probe=i2c_master_probe(bus,address,20);
+   if(probe==ESP_ERR_TIMEOUT){
+    ESP_LOGW("HARDWARE","OLED bus scan timed out; check SDA/SCL and pull-ups");
+    return;
+   }
+   if(probe==ESP_OK){
+    ESP_LOGI("HARDWARE","Other I2C device responds at 0x%02X",address);
+    found++;
+   }
+  }
+  ESP_LOGW("HARDWARE","No response at OLED addresses 0x3C/0x3D; %u other addresses responded",found);
+  return;
+ }
+ const uint8_t setup[]={0,0xae,0xd5,0x80,0xa8,0x3f,0xd3,0,0x40,0xad,0x8b,0xa1,0xc8,0xda,0x12,0x81,0x7f,0xd9,0x22,0xdb,0x35,0xa4,0xa6,0xaf};
+ const esp_err_t initialized=i2c_master_transmit(oled,setup,sizeof(setup),40);
+ display_ok.store(initialized==ESP_OK);
+ if(initialized==ESP_OK)ESP_LOGI("HARDWARE","SH1106 setup commands sent successfully");
+ else ESP_LOGW("HARDWARE","OLED responded to probe but SH1106 setup transfer failed: %s",esp_err_to_name(initialized));
 }
 static void line(uint8_t *buffer,int row,const char *s){
  for(int x=0;s[x]&&x<21;x++)glyph(s[x],buffer+row*128+x*6);
@@ -51,18 +89,63 @@ static void line(uint8_t *buffer,int row,const char *s){
 static const char *eye(const char *s){return !strcmp(s,"OPEN-LIKE")?"OPEN":!strcmp(s,"CLOSED-LIKE")?"CLOSED":"UNKNOWN";}
 static void draw(const Snapshot &s,int event){
  uint8_t frame[1024]={};char text[32];
- line(frame,0,"SAFE ROAD");line(frame,1,s.wifi?"WIFI: CONNECTED":"WIFI: OFFLINE");
- line(frame,2,s.wifi&&internet_recent()?"INTERNET: VERIFIED":"INTERNET: UNVERIFIED");
- if(s.calibrating){snprintf(text,sizeof(text),"CALIBRATE %d/9 %d/12",s.stage+1,s.samples);line(frame,3,text);line(frame,4,s.waiting?"TAP READY ON PHONE":"HOLD POSE");}
- else line(frame,3,s.monitoring?(s.face&&s.age_ms<2500?"MONITORING ACTIVE":"MONITOR: NO FACE"):"TAP CALIBRATE");
- if(!s.calibrating){snprintf(text,sizeof(text),"EYES: %s",eye(s.eye));line(frame,4,text);snprintf(text,sizeof(text),"MOUTH: %s",!strcmp(s.mouth,"OPEN-LIKE")?"OPEN":!strcmp(s.mouth,"SHUT-LIKE")?"CLOSED":"UNKNOWN");line(frame,5,text);}
- constexpr const char *labels[]={"ALERT: EYES CLOSED","ALERT: MOUTH OPEN","ALERT: HEAD DOWN","ALERT: LOOKING AWAY","ALERT: HEAD TILT"};
- line(frame,6,event>=0?labels[event]:"192.168.4.1");line(frame,7,"EXPERIMENTAL MONITOR");
- for(int page=0;page<8;page++){
-  const uint8_t position[]={uint8_t(0xb0+page),0x02,0x10}; // SH1106 visible columns 2..129.
-  uint8_t data[129];data[0]=0x40;memcpy(data+1,frame+page*128,128);
-  if(!command(position,3)||!transfer(data,sizeof(data))){display_ok.store(false);ESP_LOGW("HARDWARE","OLED disconnected; monitoring continues");break;}
+ line(frame,0,"SAFE ROAD");
+ switch((esp_timer_get_time()/3000000)%3){
+ case 0:{
+  wifi_ap_record_t ap={};
+  if(s.wifi&&esp_wifi_sta_get_ap_info(&ap)==ESP_OK){
+   char ssid[16]={};
+   for(size_t i=0;i<sizeof(ssid)-1&&ap.ssid[i];i++){
+    const auto c=ap.ssid[i];
+    ssid[i]=c>='a'&&c<='z'?char(c-'a'+'A'):c>=32&&c<=126?char(c):'-';
+   }
+   snprintf(text,sizeof(text),"WIFI: %s",ssid);line(frame,1,text);
+  }else line(frame,1,"WIFI: OFFLINE");
+  break;
  }
+ case 1:
+  line(frame,1,!s.wifi?"INTERNET: OFFLINE":internet_recent()?"INTERNET: VERIFIED":
+       time(nullptr)<1700000000?"INTERNET: SYNC CLOCK":probe_failed.load()?"INTERNET: UNVERIFIED":"INTERNET: CHECKING");
+  break;
+ default:{
+  bool email=false,webhook=false;
+  if(alerts::enabled_channels(email,webhook)){
+   snprintf(text,sizeof(text),"EMAIL:%s WEBHOOK:%s",email?"ON":"OFF",webhook?"ON":"OFF");
+   line(frame,1,text);
+  }else line(frame,1,"EMAIL/WEBHOOK: WAIT");
+  break;
+ }
+ }
+ if(s.calibrating){snprintf(text,sizeof(text),"CALIBRATE %d/9 %d/12",s.stage+1,s.samples);line(frame,2,text);line(frame,3,s.waiting?"TAP READY ON PHONE":"HOLD POSE");}
+ else if(!s.monitoring)line(frame,2,"TAP CALIBRATE");
+ else if(s.age_ms<0||s.age_ms>=2500)line(frame,2,"WAITING FOR CAMERA");
+ else line(frame,2,s.face?"FACE: DETECTED":"FACE: NOT DETECTED");
+ const bool live=!s.calibrating&&s.monitoring&&s.face&&s.age_ms>=0&&s.age_ms<2500;
+ if(live){
+  const char *eyes=eye(s.eye);
+  const char *mouth=!strcmp(s.mouth,"OPEN-LIKE")?"OPEN":!strcmp(s.mouth,"SHUT-LIKE")?"CLOSED":"-";
+  snprintf(text,sizeof(text),"EYES:%s M:%s",!strcmp(eyes,"UNKNOWN")?"-":eyes,mouth);
+  line(frame,3,text);
+  snprintf(text,sizeof(text),"HEAD DOWN: %s",s.down?"YES":"NO");line(frame,4,text);
+  snprintf(text,sizeof(text),"HEAD TILT: %s",s.tilt);line(frame,5,text);
+  snprintf(text,sizeof(text),"LOOKING AWAY: %s",s.away);line(frame,6,text);
+ }
+ constexpr const char *labels[]={"ALERT: EYES CLOSED","ALERT: MOUTH OPEN","ALERT: HEAD DOWN","ALERT: LOOKING AWAY","ALERT: HEAD TILT"};
+ line(frame,7,event>=0?labels[event]:"192.168.4.1");
+ for(int page=0;page<8;page++){
+  // Reposition each chunk so a retry can redraw the entire frame.
+  constexpr int chunk_size=32;
+  for(int x=0;x<128;x+=chunk_size){
+   const int column=x+2; // SH1106 visible columns 2..129.
+   const uint8_t position[]={uint8_t(0xb0+page),uint8_t(column&0x0f),uint8_t(0x10|(column>>4))};
+   uint8_t data[chunk_size+1];data[0]=0x40;memcpy(data+1,frame+page*128+x,chunk_size);
+   if(!command(position,sizeof(position))||!transfer(data,sizeof(data))){
+    if(display_ok.exchange(false))ESP_LOGW("HARDWARE","OLED refresh failed at page %d column %d; retrying",page,x);
+    return;
+   }
+  }
+ }
+ if(!display_ok.exchange(true))ESP_LOGI("HARDWARE","OLED refresh recovered");
 }
 static void set_buzzer(bool on){
  if(!buzzer_ok)return;
@@ -92,22 +175,51 @@ static void task(void *){
   const bool policy=alerts::local_policy(limits,events);
   int event=valid&&policy?alert_event(s.monitoring,s.face,s.age_ms,s.durations,limits,events):-1;
   bool on=pulse(event,now);if(on!=previous){set_buzzer(on);previous=on;}
-  if(display_ok.load()&&now>=next_draw){if(valid)draw(s,event);next_draw=now+750;}
+  if(oled&&now>=next_draw){if(valid)draw(s,event);next_draw=now+750;}
   vTaskDelay(pdMS_TO_TICKS(30));
  }
 }
+void internet_connection_changed(){
+ internet_generation.fetch_add(1);
+ internet_at.store(0);
+ probe_failed.store(false);
+}
 static void internet_task(void *){
+ unsigned generation=internet_generation.load();
+ int64_t next_check=0;
  while(true){
+  const unsigned current=internet_generation.load();
+  if(current!=generation){generation=current;next_check=0;}
   Snapshot s;
-  if(read_snapshot&&read_snapshot(s)&&s.wifi){
-   esp_http_client_config_t cfg={};cfg.url="https://connectivitycheck.gstatic.com/generate_204";cfg.method=HTTP_METHOD_HEAD;cfg.timeout_ms=5000;cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.disable_auto_redirect=true;
+  const auto now=esp_timer_get_time()/1000;
+  if(read_snapshot&&read_snapshot(s)&&s.wifi&&time(nullptr)>=1700000000&&now>=next_check){
+   esp_http_client_config_t cfg={};cfg.url="https://connectivitycheck.gstatic.com/generate_204";
+   cfg.method=HTTP_METHOD_GET;cfg.timeout_ms=5000;cfg.crt_bundle_attach=esp_crt_bundle_attach;
+   cfg.disable_auto_redirect=true;
    auto client=esp_http_client_init(&cfg);
-   if(client){if(esp_http_client_perform(client)==ESP_OK&&esp_http_client_get_status_code(client)==204)internet_at.store(esp_timer_get_time()/1000);else internet_at.store(0);esp_http_client_cleanup(client);}
-  }else internet_at.store(0);
-  vTaskDelay(pdMS_TO_TICKS(30000));
+   esp_err_t result=ESP_ERR_NO_MEM;
+   int status=0;
+   if(client){
+    result=esp_http_client_perform(client);
+    status=esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+   }
+   if(internet_generation.load()==generation){
+    const bool verified=result==ESP_OK&&status==204;
+    verified_generation.store(generation);
+    internet_at.store(verified?esp_timer_get_time()/1000:0);
+    probe_failed.store(!verified);
+    if(!verified)ESP_LOGW("HARDWARE","Internet probe failed: %s HTTP %d",esp_err_to_name(result),status);
+    next_check=esp_timer_get_time()/1000+(verified?30000:10000);
+   }
+  }
+  vTaskDelay(pdMS_TO_TICKS(1000));
  }
 }
-bool internet_recent(){const auto at=internet_at.load();return at>0&&esp_timer_get_time()/1000-at<65000;}
+bool internet_recent(){
+ const auto at=internet_at.load();
+ return at>0&&verified_generation.load()==internet_generation.load()&&esp_timer_get_time()/1000-at<65000;
+}
 bool oled_ready(){return display_ok.load();}
 void init(ReadSnapshot reader){
  read_snapshot=reader;

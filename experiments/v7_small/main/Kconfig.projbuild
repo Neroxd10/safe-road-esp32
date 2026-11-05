@@ -1,10 +1,10 @@
 menu "SAFE ROAD OLED and buzzer"
 config SAFE_ROAD_OLED_SDA
     int "OLED SDA GPIO"
-    default 1
+    default 41
 config SAFE_ROAD_OLED_SCL
     int "OLED SCL GPIO"
-    default 2
+    default 42
 config SAFE_ROAD_BUZZER_GPIO
     int "Buzzer I/O GPIO"
     default 21

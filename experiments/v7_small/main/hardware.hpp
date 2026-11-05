@@ -10,5 +10,6 @@ struct Snapshot {
 using ReadSnapshot=bool (*)(Snapshot &);
 void init(ReadSnapshot reader);
 bool internet_recent();
+void internet_connection_changed();
 bool oled_ready();
 }

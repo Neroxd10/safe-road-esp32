@@ -875,6 +875,7 @@ static esp_err_t scan_handler(httpd_req_t *req) {
     free(aps);return json_reply(req,doc);
 }
 static void stop_internet_sharing(){
+    hardware::internet_connection_changed();
     g_sharing.store(Sharing::Offline);
     if(g_ap_netif)esp_netif_napt_disable(g_ap_netif);
 }
@@ -1054,6 +1055,9 @@ static bool hardware_snapshot(hardware::Snapshot &out){
     out.durations[0]=t.eye_ms;out.durations[1]=t.mouth_ms;out.durations[2]=t.down_ms;out.durations[3]=t.away_ms;out.durations[4]=t.tilt_ms;
     memcpy(out.eye,t.eye,sizeof(out.eye));out.eye[sizeof(out.eye)-1]=0;
     memcpy(out.mouth,t.mouth,sizeof(out.mouth));out.mouth[sizeof(out.mouth)-1]=0;
+    out.down=t.head_down;
+    memcpy(out.away,t.away,sizeof(out.away));out.away[sizeof(out.away)-1]=0;
+    memcpy(out.tilt,t.tilt,sizeof(out.tilt));out.tilt[sizeof(out.tilt)-1]=0;
     xSemaphoreGive(g_telemetry_mutex);out.wifi=g_wifi_connected.load();return true;
 }
 extern "C" void app_main(void)

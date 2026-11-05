@@ -174,8 +174,8 @@ exposed and unused on your actual board before wiring. Disconnect power first.
 | --- | --- |
 | OLED GND | GND |
 | OLED VCC | 3V3 |
-| OLED SDA | GPIO 1 |
-| OLED SCK / SCL | GPIO 2 |
+| OLED SDA | GPIO 41 |
+| OLED SCK / SCL | GPIO 42 |
 | Passive buzzer GND | GND |
 | Passive buzzer VCC | 3V3, only if the actual module is rated to operate at 3.3 V |
 | Passive buzzer I/O / IN | GPIO 21 |

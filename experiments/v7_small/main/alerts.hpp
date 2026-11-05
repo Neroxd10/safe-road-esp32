@@ -9,4 +9,5 @@ void reset_episode();
 bool local_policy(int *hold_ms,uint32_t &events);
 cJSON *request(cJSON *doc);
 void status(cJSON *doc);
+bool enabled_channels(bool &email,bool &webhook);
 }
