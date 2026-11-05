@@ -28,5 +28,6 @@ vm.createContext(ctx);vm.runInContext(html.split('<script>')[1].split('</script>
  sample.sharing_status='Hotspot sharing ready';sample.internet_sharing=true;vm.runInContext('update('+JSON.stringify(sample)+')',ctx);assert.equal($('sharingInfo').textContent,'Hotspot sharing ready');
  sample.sharing_status='Home Wi-Fi overlaps hotspot';sample.internet_sharing=false;vm.runInContext('update('+JSON.stringify(sample)+')',ctx);assert.equal($('sharingInfo').textContent,sample.sharing_status);
  $('apName').value='My SAFE ROAD';$('apPassword').value='short';const before=requests.length;await click('applyHotspot');assert.equal(requests.length,before);$('apPassword').value='';await click('applyHotspot');assert.equal(requests.at(-1).ssid,'My SAFE ROAD');assert.equal(requests.at(-1).password,'');assert.equal($('apPassword').value,'');
+ assert(!ids.has('resetHotspot'));
  console.log('PASS: keyless settings, calibration, secret-preserving saves, app-password normalization, errors and offline/delivery status');
 })().catch(e=>{console.error(e);process.exitCode=1});

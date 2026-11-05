@@ -38,6 +38,7 @@
 #include "hardware.hpp"
 #include "ap_settings.hpp"
 #include "esp_system.h"
+#include "driver/gpio.h"
 #include "dl_image_jpeg.hpp"
 
 
@@ -953,22 +954,80 @@ static void apply_hotspot_task(void *){
     // Wait for the HTTP response to reach the client, then reload saved config.
     vTaskDelay(pdMS_TO_TICKS(2500));esp_restart();
 }
+static constexpr gpio_num_t HOTSPOT_RESET_PIN=GPIO_NUM_14;
+static_assert(HOTSPOT_RESET_PIN!=CONFIG_SAFE_ROAD_OLED_SDA &&
+              HOTSPOT_RESET_PIN!=CONFIG_SAFE_ROAD_OLED_SCL &&
+              HOTSPOT_RESET_PIN!=CONFIG_SAFE_ROAD_BUZZER_GPIO);
+
+static void hotspot_reset_button_task(void *){
+    constexpr int64_t hold_us=5000000;
+    bool released=false;
+    int64_t pressed_since=0;
+    for(;;){
+        if(gpio_get_level(HOTSPOT_RESET_PIN)){
+            released=true;
+            pressed_since=0;
+        }else if(released){
+            const int64_t now=esp_timer_get_time();
+            if(!pressed_since)pressed_since=now;
+            if(now-pressed_since>=hold_us){
+                released=false;
+                if(!g_hotspot_restart.exchange(true)){
+                    nvs_handle_t handle;
+                    esp_err_t err=nvs_open("safe_road",NVS_READWRITE,&handle);
+                    if(err==ESP_OK){
+                        err=nvs_erase_key(handle,"ap_settings");
+                        if(err==ESP_ERR_NVS_NOT_FOUND)err=ESP_OK;
+                        if(err==ESP_OK)err=nvs_commit(handle);
+                        nvs_close(handle);
+                    }
+                    if(err==ESP_OK){
+                        ESP_LOGI(TAG,"Physical button restored default hotspot settings");
+                        esp_restart();
+                    }
+                    ESP_LOGE(TAG,"Hotspot reset failed: %s",esp_err_to_name(err));
+                    g_hotspot_restart.store(false);
+                }
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(25));
+    }
+}
+
+static void start_hotspot_reset_button(){
+    gpio_config_t config={};
+    config.pin_bit_mask=1ULL<<HOTSPOT_RESET_PIN;
+    config.mode=GPIO_MODE_INPUT;
+    config.pull_up_en=GPIO_PULLUP_ENABLE;
+    if(gpio_config(&config)!=ESP_OK||
+       xTaskCreate(hotspot_reset_button_task,"ap_reset_button",3072,nullptr,2,nullptr)!=pdPASS){
+        ESP_LOGE(TAG,"Hotspot reset button unavailable");
+        return;
+    }
+    ESP_LOGI(TAG,"Hotspot reset button on GPIO 14. Hold to ground for 5 seconds.");
+}
+
 static esp_err_t hotspot_handler(httpd_req_t *req){
     cJSON *doc=post_json(req);
     if(!doc)return error_json(req,"Invalid JSON",400);
+    hotspot::Settings settings;
     const auto *name=cJSON_GetObjectItemCaseSensitive(doc,"ssid");
     const auto *password=cJSON_GetObjectItemCaseSensitive(doc,"password");
-    hotspot::Settings settings;
     if(!cJSON_IsString(name)||!cJSON_IsString(password)||strlen(name->valuestring)>32||strlen(password->valuestring)>63){
         cJSON_Delete(doc);return error_json(req,"Hotspot name must be 1-32 bytes and password 8-63 characters",400);
     }
     snprintf(settings.ssid,sizeof(settings.ssid),"%s",name->valuestring);
     snprintf(settings.password,sizeof(settings.password),"%s",password->valuestring[0]?password->valuestring:g_ap_password);
+    if(!hotspot::valid(settings)){
+        cJSON_Delete(doc);
+        return error_json(req,"Use a name of 1-32 bytes and password of 8-63 printable characters",400);
+    }
     cJSON_Delete(doc);
-    if(!hotspot::valid(settings))return error_json(req,"Use a name of 1-32 bytes and password of 8-63 printable characters",400);
     if(g_hotspot_restart.exchange(true))return error_json(req,"Hotspot change already pending",409);
     nvs_handle_t handle;esp_err_t err=nvs_open("safe_road",NVS_READWRITE,&handle);
-    if(err==ESP_OK){err=nvs_set_blob(handle,"ap_settings",&settings,sizeof(settings));if(err==ESP_OK)err=nvs_commit(handle);nvs_close(handle);}
+    if(err==ESP_OK){err=nvs_set_blob(handle,"ap_settings",&settings,sizeof(settings));
+        if(err==ESP_OK)err=nvs_commit(handle);
+        nvs_close(handle);}
     if(err!=ESP_OK){g_hotspot_restart.store(false);return error_json(req,"Could not save hotspot settings",503);}
     if(xTaskCreate(apply_hotspot_task,"ap_restart",2048,nullptr,2,nullptr)!=pdPASS){
         g_hotspot_restart.store(false);return error_json(req,"Settings saved; manually restart the board to apply",503);
@@ -1071,6 +1130,7 @@ extern "C" void app_main(void)
     if (!g_telemetry_mutex || !g_frame_mutex) {ESP_LOGE(TAG,"Mutex allocation failed");return;}
     if (start_camera()!=ESP_OK) {ESP_LOGE(TAG,"Camera initialization failed");return;}
     start_network();
+    start_hotspot_reset_button();
     hardware::init(hardware_snapshot);
     esp_sntp_config_t time_config=ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     if(esp_netif_sntp_init(&time_config)!=ESP_OK)ESP_LOGW(TAG,"Internet time sync could not start; TLS notifications may fail");

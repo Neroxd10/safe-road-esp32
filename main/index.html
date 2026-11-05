@@ -125,13 +125,25 @@ $('saveAlerts').addEventListener('click',async()=>{
 $('testEmail').addEventListener('click',()=>post('/api/notifications',{action:'test_email'},$('testEmail'),'alertMessage'));
 $('testWebhook').addEventListener('click',()=>post('/api/notifications',{action:'test_webhook'},$('testWebhook'),'alertMessage'));
 
+async function changeHotspot(body){
+ const button=$('applyHotspot');
+ button.disabled=true;
+ text('hotspotMessage','Saving…');
+ try{
+  const result=await getJSON('/api/hotspot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  $('apPassword').value='';
+  text('hotspotMessage',result.message);
+ }catch(e){
+  text('hotspotMessage',e.message);
+  button.disabled=false;
+ }
+}
 $('applyHotspot').addEventListener('click',async()=>{
  const ssid=$('apName').value.trim(),password=$('apPassword').value;
  if(!ssid||new TextEncoder().encode(ssid).length>32){text('hotspotMessage','Enter a hotspot name of 1-32 bytes.');return}
  if(password&&(password.length<8||password.length>63||/[^\x20-\x7e]/.test(password))){text('hotspotMessage','Password must be 8-63 printable characters.');return}
  if(!confirm('Save hotspot settings and restart the device? Reconnect to '+ssid+' afterward.'))return;
- const button=$('applyHotspot');button.disabled=true;text('hotspotMessage','Saving…');
- try{const result=await getJSON('/api/hotspot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid,password})});$('apPassword').value='';text('hotspotMessage',result.message)}catch(e){text('hotspotMessage',e.message);button.disabled=false}
+ await changeHotspot({ssid,password});
 });
 $('rawMetrics').style.whiteSpace='pre-line';poll();preview();setInterval(poll,1300);setInterval(preview,1800);
 </script>
