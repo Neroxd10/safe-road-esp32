@@ -1,5 +1,5 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
-const html=fs.readFileSync('experiments/v7_small/main/index.html','utf8');
+const html=fs.readFileSync('main/index.html','utf8');
 const ids=new Set([...html.matchAll(/id="([^"]+)"/g)].map(m=>m[1]));const elements=new Map(),requests=[];
 function el(){return {value:'',checked:false,disabled:false,textContent:'',children:[],style:{},handlers:{},classList:{toggle(){}},addEventListener(e,f){this.handlers[e]=f},append(v){this.children.push(v)},focus(){},getContext(){return {clearRect(){},beginPath(){},arc(){},fill(){}}},width:640,height:480}}
 let saved={email_enabled:false,webhook_enabled:false,email:'driver@gmail.com',recipient:'friend@example.com',password_saved:true,webhook_saved:true,events:1,hold_ms:[2000,4000,3000,3500,5000],cooldown:60};

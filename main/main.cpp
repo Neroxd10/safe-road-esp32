@@ -1,8 +1,9 @@
 // S.A.F.E. R.O.A.D. / Standalone Stage 4 (Wi-Fi + local browser dashboard)
 // ESP32-S3 N16R8 + OV5640, ESP-IDF 5.5.x / human_face_detect 0.5.2
-// Face detector supplies 5 sparse landmarks ONLY: eye centers, mouth corners, nose.
-// These PROXIES are not validated yawning, drowsiness, or full 3D pose classifiers.
-// Does not drive a buzzer, SMS, emergency system, or any driving decision.
+// MediaPipe detector and smaller 468-landmark geometry experiment.
+// Head orientation remains a calibrated 2D proxy, not MediaPipe's 3D transform.
+// Experimental local monitoring; local buzzer and remote alerts; no driving decisions.
+
 
 #include <algorithm>
 #include <cmath>
@@ -29,20 +30,33 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "human_face_detect.hpp"
+#include "v7_engine.hpp"
+#include "small_features.hpp"
+#include "alerts.hpp"
+#include "esp_netif_sntp.h"
+#include "network_policy.hpp"
+#include "hardware.hpp"
+#include "ap_settings.hpp"
+#include "esp_system.h"
 #include "dl_image_jpeg.hpp"
-#include "tiny_ai.h"
+
 
 static constexpr char TAG[] = "SAFE_ROAD";
 static constexpr float PI_F = 3.14159265358979323846f;
 static constexpr int EYE_W = 16, EYE_H = 10, EYE_N = 2 * EYE_W * EYE_H;
 static constexpr int MOUTH_W = 16, MOUTH_H = 12, MOUTH_N = MOUTH_W * MOUTH_H;
 static constexpr int CAPTURE_SAMPLES = 12;
+static v7::Result g_v7_result;
 static constexpr int64_t READY_US = 4000000;
 
 // Web requests only read a protected snapshot; neural inference always runs on ESP32.
 struct Telemetry {
     bool face = false;
+    float ear_l=0,ear_r=0,jaw=0,blink_l=0,blink_r=0,mouth_ratio=0,confidence=0,inference_ms=0;
+    float overlay[32]={};
+    char engine_error[80]={};
+    char face_reason[96]="Waiting for first face measurements";
+    float detector_score=0,landmark_ms=0,prelu_ms=0,preprocess_ms=0,expression_ms=0,detector_ms=0;
     bool calibrated = false;
     bool calibration_running = false, calibration_waiting = false, calibration_saved = false;
     bool preparing = false;
@@ -72,8 +86,20 @@ static std::atomic<bool> g_wifi_connected(false);
 static std::atomic<bool> g_wifi_connecting(false);
 static std::atomic<bool> g_wifi_pending(false);
 static esp_netif_t *g_sta_netif = nullptr;
+static esp_netif_t *g_ap_netif = nullptr;
+enum class Sharing { Offline, Ready, SubnetConflict, DnsFailed, NatFailed };
+static std::atomic<Sharing> g_sharing{Sharing::Offline};
+static const char *sharing_message(Sharing state){
+    switch(state){
+    case Sharing::Ready:return "Hotspot sharing ready; reconnect to SAFE_ROAD once if browsing does not work";
+    case Sharing::SubnetConflict:return "Home Wi-Fi overlaps 192.168.4.x; use a different upstream network";
+    case Sharing::DnsFailed:return "Could not configure hotspot DNS; reconnect home Wi-Fi";
+    case Sharing::NatFailed:return "Could not enable hotspot forwarding; check serial log";
+    default:return "Connect the device to internet Wi-Fi to share its connection";
+    }
+}
 static char g_ap_ssid[33] = {};
-static char g_ap_password[20] = {};
+static char g_ap_password[64] = {};
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 extern const uint8_t index_html_end[] asm("_binary_index_html_end");
 
@@ -95,35 +121,8 @@ static void capture_preview(const camera_fb_t *fb) {
 }
 
 
-static float eye_open[EYE_N] = {}, eye_closed[EYE_N] = {};
-static float eye_open_sum[EYE_N] = {}, eye_closed_sum[EYE_N] = {};
-static float mouth_shut[MOUTH_N] = {}, mouth_wide[MOUTH_N] = {};
-static float mouth_shut_sum[MOUTH_N] = {}, mouth_wide_sum[MOUTH_N] = {};
-static float eye_live[EYE_N] = {}, mouth_live[MOUTH_N] = {};
-
-// Snapshot copied under the telemetry lock. Inference never waits on HTTP.
-struct TrainingSample {
-    float left_eye[EYE_W*EYE_H], right_eye[EYE_W*EYE_H], mouth[MOUTH_N];
-    uint32_t sample_id=0;
-    int64_t at_us=0;
-    bool valid=false;
-};
-static TrainingSample g_training_sample{};
-static uint32_t g_training_boot_id=0;
-static void publish_training_sample(bool valid) {
-    if (xSemaphoreTake(g_telemetry_mutex,0)!=pdTRUE) return;
-    g_training_sample.valid=valid;
-    if (valid) {
-        memcpy(g_training_sample.left_eye,eye_live,sizeof(g_training_sample.left_eye));
-        memcpy(g_training_sample.right_eye,eye_live+EYE_W*EYE_H,sizeof(g_training_sample.right_eye));
-        memcpy(g_training_sample.mouth,mouth_live,sizeof(g_training_sample.mouth));
-        ++g_training_sample.sample_id;
-        g_training_sample.at_us=esp_timer_get_time();
-    }
-    xSemaphoreGive(g_telemetry_mutex);
-}
-
 struct Pose {
+    float ear_l=0,ear_r=0,mouth_ratio=0,jaw=0,blink_l=0,blink_r=0;
     float roll = 0;     // degrees: angle of eye-to-eye line
     float yaw = 0;      // nose deviation along eye-to-eye line / interocular distance
     float pitch = 0;    // nose distance along downward eye-axis / interocular distance
@@ -135,6 +134,12 @@ struct PoseSum {
     Pose total = {};
     int n = 0;
     void add(const Pose &p) {
+        total.ear_l += p.ear_l;
+        total.ear_r += p.ear_r;
+        total.mouth_ratio += p.mouth_ratio;
+        total.jaw += p.jaw;
+        total.blink_l += p.blink_l;
+        total.blink_r += p.blink_r;
         total.roll += p.roll;
         total.yaw += p.yaw;
         total.pitch += p.pitch;
@@ -146,6 +151,12 @@ struct PoseSum {
         Pose a = {};
         if (!n) return a;
         float k = 1.0f / n;
+        a.ear_l = total.ear_l * k;
+        a.ear_r = total.ear_r * k;
+        a.mouth_ratio = total.mouth_ratio * k;
+        a.jaw = total.jaw * k;
+        a.blink_l = total.blink_l * k;
+        a.blink_r = total.blink_r * k;
         a.roll = total.roll * k;
         a.yaw = total.yaw * k;
         a.pitch = total.pitch * k;
@@ -155,7 +166,7 @@ struct PoseSum {
     }
 };
 
-// Capture stages are guided via serial output. No smartphone / Wi-Fi needed.
+// Guided capture is started with dashboard buttons; saved monitoring runs without a client.
 enum Cal : int {
     EYES_OPEN = 0, EYES_CLOSED, NEUTRAL, MOUTH_OPEN, HEAD_DOWN,
     LOOK_LEFT, LOOK_RIGHT, TILT_LEFT, TILT_RIGHT, STAGE_COUNT
@@ -195,6 +206,7 @@ static void publish_progress(bool valid) {
     g_telemetry.stage = stage;
     g_telemetry.samples = count;
     const int64_t left = READY_US - (esp_timer_get_time() - ready_start);
+    g_telemetry.preparing=preparing && left>0;
     g_telemetry.wait_s = (preparing && left > 0) ? int((left + 999999) / 1000000) : 0;
     g_telemetry.eye_ok = eye_good;
     g_telemetry.mouth_ok = mouth_good;
@@ -229,9 +241,9 @@ static esp_err_t start_camera()
     c.pixel_format=PIXFORMAT_JPEG;
     c.frame_size=FRAMESIZE_VGA;
     c.jpeg_quality=14;
-    c.fb_count=1;
+    c.fb_count=2;
     c.fb_location=CAMERA_FB_IN_PSRAM;
-    c.grab_mode=CAMERA_GRAB_WHEN_EMPTY;
+    c.grab_mode=CAMERA_GRAB_LATEST;
     const esp_err_t err = esp_camera_init(&c);
     if (err != ESP_OK) return err;
     sensor_t *s = esp_camera_sensor_get();
@@ -240,48 +252,6 @@ static esp_err_t start_camera()
     // Flip at the sensor so detection and dashboard use the same orientation.
     if (s->set_vflip(s, 1) != 0) return ESP_FAIL;
     return ESP_OK;
-}
-
-static float dist2(const float *a, const float *b, int n) {
-    float s = 0.0f;
-    for (int i=0; i<n; ++i) { float d=a[i]-b[i]; s+=d*d; }
-    return s / float(n);
-}
-static void add_features(float *sum, const float *feat, int n) {
-    for (int i=0; i<n; ++i) sum[i] += feat[i];
-}
-static void mean_features(float *out, const float *sum, int n, int samples) {
-    for (int i=0; i<n; ++i) out[i] = sum[i] / float(samples);
-}
-
-// Obtain a normalized gray image patch in a face-local frame aligned to the eyes.
-static bool patch(const dl::image::img_t &img, float cx, float cy, float ux, float uy,
-                  float width, float height, int cols, int rows, float *out)
-{
-    if (!img.data || width < 4 || height < 3 || cols*rows > EYE_N) return false;
-    const auto *rgb = static_cast<const uint8_t *>(img.data);
-    float samples[EYE_N];
-    float sum = 0;
-    for (int y=0; y<rows; ++y) {
-        for (int x=0; x<cols; ++x) {
-            const float h = (float(x)/(cols-1)-0.5f)*width;
-            const float v = (float(y)/(rows-1)-0.5f)*height;
-            const int px = int(std::lround(cx+h*ux-v*uy));
-            const int py = int(std::lround(cy+h*uy+v*ux));
-            if (px<0 || py<0 || px>=img.width || py>=img.height) return false;
-            const size_t ofs=(size_t(py)*size_t(img.width)+size_t(px))*3;
-            const float gray = 0.299f*rgb[ofs] + 0.587f*rgb[ofs+1] + 0.114f*rgb[ofs+2];
-            samples[y*cols+x]=gray;
-            sum+=gray;
-        }
-    }
-    const int n=cols*rows;
-    const float avg=sum/float(n);
-    float var=0;
-    for (int i=0; i<n; ++i) {float d=samples[i]-avg;var+=d*d;}
-    const float scale=std::sqrt(var/float(n)+100.0f);
-    for (int i=0; i<n; ++i) out[i]=(samples[i]-avg)/scale;
-    return true;
 }
 
 // Keypoint layout for espressif/human_face_detect MSR+MNP model:
@@ -311,14 +281,7 @@ static bool measure(const dl::image::img_t &img, const int *kp, const int *box,
     pose.pitch=(-(nx-ex)*uy + (ny-ey)*ux)/iod;
     pose.mouth_y=(-(mx-ex)*uy+(my-ey)*ux)/iod;
     pose.face_y=float(box[1]+box[3])/(2.0f*img.height);
-    // Eye crops are independent: both must be available.
-    have_eyes=patch(img,lx,ly,ux,uy,iod*0.50f,iod*0.28f,EYE_W,EYE_H,eye_live)
-           && patch(img,rx,ry,ux,uy,iod*0.50f,iod*0.28f,EYE_W,EYE_H,eye_live+EYE_W*EYE_H);
-    // Mouth's center is slightly below the mouth corners; look at the opening area.
-    // This is image template matching, NOT a lip-aspect ratio or yawning model.
-    have_mouth=patch(img,mx-uy*0.08f*mouth_span,my+ux*0.08f*mouth_span,
-                     ux,uy,mouth_span*1.30f,mouth_span*1.05f,
-                     MOUTH_W,MOUTH_H,mouth_live);
+    have_eyes=have_mouth=true;
     return true;
 }
 
@@ -339,8 +302,9 @@ static void check_calibration()
     const Pose right=poses[LOOK_RIGHT].mean();
     const Pose tl=poses[TILT_LEFT].mean();
     const Pose tr=poses[TILT_RIGHT].mean();
-    eye_good=tiny_ai::trained || dist2(eye_open,eye_closed,EYE_N)>0.08f;
-    mouth_good=tiny_ai::trained || dist2(mouth_shut,mouth_wide,MOUTH_N)>0.08f;
+    const Pose opened=poses[EYES_OPEN].mean(),closed=poses[EYES_CLOSED].mean(),wide=poses[MOUTH_OPEN].mean();
+    eye_good=small_features::calibrated_eyes(opened.ear_l,opened.ear_r,closed.ear_l,closed.ear_r);
+    mouth_good=wide.mouth_ratio>n.mouth_ratio+.08f;
     const float dyaw_l=left.yaw-n.yaw, dyaw_r=right.yaw-n.yaw;
     yaw_good[0]=std::fabs(dyaw_l)>=0.045f;
     yaw_good[1]=std::fabs(dyaw_r)>=0.045f;
@@ -366,8 +330,6 @@ static void check_calibration()
 // Bump version when feature extraction, camera orientation, or this layout changes.
 struct SavedCalibration {
     uint32_t version;
-    float eyes_open[EYE_N], eyes_closed[EYE_N];
-    float mouth_closed[MOUTH_N], mouth_open[MOUTH_N];
     PoseSum pose[STAGE_COUNT];
 };
 static SavedCalibration saved_data;
@@ -375,15 +337,11 @@ static constexpr uint32_t CALIBRATION_VERSION=1; // sensor vflip=1
 
 static bool save_calibration() {
     saved_data.version=CALIBRATION_VERSION;
-    memcpy(saved_data.eyes_open,eye_open,sizeof(eye_open));
-    memcpy(saved_data.eyes_closed,eye_closed,sizeof(eye_closed));
-    memcpy(saved_data.mouth_closed,mouth_shut,sizeof(mouth_shut));
-    memcpy(saved_data.mouth_open,mouth_wide,sizeof(mouth_wide));
     memcpy(saved_data.pose,poses,sizeof(poses));
     nvs_handle_t handle;
     esp_err_t err=nvs_open("safe_road",NVS_READWRITE,&handle);
     if (err==ESP_OK) {
-        err=nvs_set_blob(handle,"calibration",&saved_data,sizeof(saved_data));
+        err=nvs_set_blob(handle,"small_cal",&saved_data,sizeof(saved_data));
         if (err==ESP_OK) err=nvs_commit(handle);
         nvs_close(handle);
     }
@@ -395,22 +353,17 @@ static bool load_calibration() {
     nvs_handle_t handle;
     if (nvs_open("safe_road",NVS_READONLY,&handle)!=ESP_OK) return false;
     size_t size=sizeof(saved_data);
-    const esp_err_t err=nvs_get_blob(handle,"calibration",&saved_data,&size);
+    const esp_err_t err=nvs_get_blob(handle,"small_cal",&saved_data,&size);
     nvs_close(handle);
     if (err!=ESP_OK || size!=sizeof(saved_data) || saved_data.version!=CALIBRATION_VERSION) return false;
     for (const auto &pose:saved_data.pose) {
         if (pose.n!=CAPTURE_SAMPLES || !std::isfinite(pose.total.roll) ||
             !std::isfinite(pose.total.yaw) || !std::isfinite(pose.total.pitch) ||
-            !std::isfinite(pose.total.mouth_y) || !std::isfinite(pose.total.face_y)) return false;
+            !std::isfinite(pose.total.mouth_y) || !std::isfinite(pose.total.face_y) ||
+            !std::isfinite(pose.total.ear_l) || !std::isfinite(pose.total.ear_r) ||
+            !std::isfinite(pose.total.jaw) || !std::isfinite(pose.total.mouth_ratio) ||
+            !std::isfinite(pose.total.blink_l) || !std::isfinite(pose.total.blink_r)) return false;
     }
-    for (float f:saved_data.eyes_open) if (!std::isfinite(f)) return false;
-    for (float f:saved_data.eyes_closed) if (!std::isfinite(f)) return false;
-    for (float f:saved_data.mouth_closed) if (!std::isfinite(f)) return false;
-    for (float f:saved_data.mouth_open) if (!std::isfinite(f)) return false;
-    memcpy(eye_open,saved_data.eyes_open,sizeof(eye_open));
-    memcpy(eye_closed,saved_data.eyes_closed,sizeof(eye_closed));
-    memcpy(mouth_shut,saved_data.mouth_closed,sizeof(mouth_shut));
-    memcpy(mouth_wide,saved_data.mouth_open,sizeof(mouth_wide));
     memcpy(poses,saved_data.pose,sizeof(poses));
     stage=STAGE_COUNT; tracking=true; calibration_saved=true;
     check_calibration();
@@ -467,27 +420,15 @@ static void track_frame(const Pose &p, bool have_eyes, bool have_mouth)
     const bool tilt_like=tilt_left||tilt_right;
     const bool geometry_forward=!away_like && !tilt_like && !down_like;
 
-    const float eye_ratio=(eye_good && have_eyes)?dist2(eye_live,eye_open,EYE_N)/(dist2(eye_live,eye_closed,EYE_N)+1e-5f):0;
-    const float eye_open_ratio=(eye_good && have_eyes)?dist2(eye_live,eye_closed,EYE_N)/(dist2(eye_live,eye_open,EYE_N)+1e-5f):0;
-    bool eye_closed_like=eye_good && have_eyes && geometry_forward && eye_ratio>1.40f;
-    const char *eye= !eye_good||!have_eyes ? "UNKNOWN" : (eye_ratio>1.40f?"CLOSED-LIKE":(eye_open_ratio>1.40f?"OPEN-LIKE":"UNCERTAIN"));
-
-    const float mouth_ratio=(mouth_good && have_mouth)?dist2(mouth_live,mouth_shut,MOUTH_N)/(dist2(mouth_live,mouth_wide,MOUTH_N)+1e-5f):0;
-    const float shut_ratio=(mouth_good && have_mouth)?dist2(mouth_live,mouth_wide,MOUTH_N)/(dist2(mouth_live,mouth_shut,MOUTH_N)+1e-5f):0;
-    bool mouth_open_like=mouth_good && have_mouth && geometry_forward && mouth_ratio>1.50f;
-    const char *mouth= !mouth_good||!have_mouth ? "UNKNOWN" : (mouth_ratio>1.50f?"OPEN-LIKE":(shut_ratio>1.50f?"SHUT-LIKE":"UNCERTAIN"));
-
-    if constexpr (tiny_ai::trained) {
-        const float left=have_eyes ? tiny_ai::probability(eye_live,tiny_ai::left_eye_weights,tiny_ai::left_eye_bias) : 0.5f;
-        const float right=have_eyes ? tiny_ai::probability(eye_live+EYE_W*EYE_H,tiny_ai::right_eye_weights,tiny_ai::right_eye_bias) : 0.5f;
-        const float wide=have_mouth ? tiny_ai::probability(mouth_live,tiny_ai::mouth_weights,tiny_ai::mouth_bias) : 0.5f;
-        eye_closed_like=have_eyes && geometry_forward && left>=0.8f && right>=0.8f;
-        mouth_open_like=have_mouth && geometry_forward && wide>=0.8f;
-        eye=!have_eyes || !geometry_forward ? "UNKNOWN" : eye_closed_like ? "CLOSED-LIKE" :
-            left<=0.2f && right<=0.2f ? "OPEN-LIKE" : "UNCERTAIN";
-        mouth=!have_mouth || !geometry_forward ? "UNKNOWN" : mouth_open_like ? "OPEN-LIKE" :
-            wide<=0.2f ? "SHUT-LIKE" : "UNCERTAIN";
-    }
+    const Pose opened=poses[EYES_OPEN].mean(),closed=poses[EYES_CLOSED].mean(),wide=poses[MOUTH_OPEN].mean();
+    const auto eye_state=small_features::eyes(p.ear_l,p.ear_r,opened.ear_l,opened.ear_r,closed.ear_l,closed.ear_r,
+        eye_good&&have_eyes&&geometry_forward);
+    const bool eye_closed_like=eye_state==small_features::Eye::Closed;
+    const char *eye=eye_state==small_features::Eye::Unknown?"UNKNOWN":eye_closed_like?"CLOSED-LIKE":
+        eye_state==small_features::Eye::Open?"OPEN-LIKE":"UNCERTAIN";
+    const float mouth_threshold=std::max(.18f,(n.mouth_ratio+wide.mouth_ratio)*.5f);
+    const bool mouth_open_like=mouth_good && have_mouth && geometry_forward && p.mouth_ratio>mouth_threshold;
+    const char *mouth=!mouth_good||!have_mouth||!geometry_forward?"UNKNOWN":mouth_open_like?"OPEN-LIKE":p.mouth_ratio<mouth_threshold*.8f?"SHUT-LIKE":"UNCERTAIN";
 
     const int64_t eye_ms=hold_eye.update(eye_closed_like,now);
     const int64_t mouth_ms=hold_mouth.update(mouth_open_like,now);
@@ -512,7 +453,9 @@ static void track_frame(const Pose &p, bool have_eyes, bool have_mouth)
         xSemaphoreGive(g_telemetry_mutex);
     }
 
-    // Print metrics about once a second, plus the state duration. No physical alarms.
+    const int64_t durations[5]={eye_ms,mouth_ms,down_ms,away_ms,tilt_ms};
+    alerts::observe(durations);
+    // Serial metrics are rate-limited independently of background notifications.
     if (now-last_report_us < 1000000) return;
     last_report_us=now;
     ESP_LOGI(TAG,"eye=%s (%lldms) mouth=%s (%lldms) headDown~=%s (%.2f,%lldms)",
@@ -520,11 +463,11 @@ static void track_frame(const Pose &p, bool have_eyes, bool have_mouth)
     ESP_LOGI(TAG,"lookingAway~=%s (%lldms) headTilt~=%s (%lldms,rollDelta=%.1f deg) yawDelta=%.3f",
         look_left?"LEFT":(look_right?"RIGHT":"no"),(long long)away_ms,
         tilt_left?"LEFT":(tilt_right?"RIGHT":"no"),(long long)tilt_ms,droll,dyaw);
-    if (mouth_ms>=3000) ESP_LOGW(TAG,"MOUTH OPEN-LIKE >=3s: may be yawning, speaking, etc. NOT validated.");
-    if (down_ms>=2500) ESP_LOGW(TAG,"HEAD DOWN-LIKE >=2.5s: unverified 2D head proxy.");
-    if (away_ms>=2500) ESP_LOGW(TAG,"LOOKING AWAY-LIKE >=2.5s: unverified yaw proxy.");
-    if (tilt_ms>=2500) ESP_LOGW(TAG,"SIDE TILT-LIKE >=2.5s: unverified roll proxy.");
-    if (eye_ms>=1500) ESP_LOGW(TAG,"EYES CLOSED-LIKE >=1.5s: experimental only, no alarm.");
+    int limits[5];uint32_t enabled=0;
+    if(alerts::local_policy(limits,enabled))for(int i=0;i<5;i++){
+        if((enabled&(1u<<i))&&durations[i]>=limits[i])
+            ESP_LOGW(TAG,"Configured detection %d held >=%dms: experimental alert",i+1,limits[i]);
+    }
 }
 
 static void accept_sample(const Pose &p, bool have_eyes, bool have_mouth)
@@ -546,18 +489,10 @@ static void accept_sample(const Pose &p, bool have_eyes, bool have_mouth)
     // If feature isn't available, skip this frame (never use garbage data).
     if ((stage==EYES_OPEN || stage==EYES_CLOSED) && !have_eyes) return;
     if ((stage==NEUTRAL || stage==MOUTH_OPEN) && !have_mouth) return;
-    if (stage==EYES_OPEN) add_features(eye_open_sum,eye_live,EYE_N);
-    if (stage==EYES_CLOSED) add_features(eye_closed_sum,eye_live,EYE_N);
-    if (stage==NEUTRAL) add_features(mouth_shut_sum,mouth_live,MOUTH_N);
-    if (stage==MOUTH_OPEN) add_features(mouth_wide_sum,mouth_live,MOUTH_N);
     poses[stage].add(p);
     ++count;
     if (count%3==0) ESP_LOGI(TAG,"CALIBRATION %d/9: %d/%d valid samples",stage+1,count,CAPTURE_SAMPLES);
     if (count < CAPTURE_SAMPLES) return;
-    if (stage==EYES_OPEN) mean_features(eye_open,eye_open_sum,EYE_N,count);
-    if (stage==EYES_CLOSED) mean_features(eye_closed,eye_closed_sum,EYE_N,count);
-    if (stage==NEUTRAL) mean_features(mouth_shut,mouth_shut_sum,MOUTH_N,count);
-    if (stage==MOUTH_OPEN) mean_features(mouth_wide,mouth_wide_sum,MOUTH_N,count);
     ESP_LOGI(TAG,"Captured %s",directions[stage]);
     if (single_stage) {
         single_stage=false; stage=STAGE_COUNT; count=0; tracking=true; preparing=false; calibration_running=false;
@@ -566,11 +501,12 @@ static void accept_sample(const Pose &p, bool have_eyes, bool have_mouth)
         check_calibration();
         calibration_saved=save_calibration();
         ESP_LOGW(TAG,"CALIBRATION COMPLETE. Return to NEUTRAL and try each motion SEPARATELY.");
-        ESP_LOGW(TAG,"Prototypes only: no buzzer, SMS, or safety decisions. Use dashboard buttons to recalibrate.");
+        ESP_LOGW(TAG,"Experimental local buzzer and remote alerts enabled. Use dashboard buttons to recalibrate.");
     }
 }
 
 static void reset_timers() {
+    alerts::reset_episode();
     hold_eye.reset();hold_mouth.reset();hold_down.reset();hold_away.reset();hold_tilt.reset();
 }
 
@@ -579,10 +515,6 @@ static void recalibrate_stage(int selected) {
     // Runs only in the inference task, preserving every other captured stage.
     if (!tracking) return;
     poses[selected]=PoseSum{};
-    if (selected==EYES_OPEN) memset(eye_open_sum,0,sizeof(eye_open_sum));
-    if (selected==EYES_CLOSED) memset(eye_closed_sum,0,sizeof(eye_closed_sum));
-    if (selected==NEUTRAL) memset(mouth_shut_sum,0,sizeof(mouth_shut_sum));
-    if (selected==MOUTH_OPEN) memset(mouth_wide_sum,0,sizeof(mouth_wide_sum));
     stage=selected; count=0; tracking=false; preparing=true; single_stage=true;
     calibration_running=true; calibration_waiting=false; calibration_saved=false;
     ready_start=esp_timer_get_time(); last_ready_second=99;
@@ -592,10 +524,6 @@ static void recalibrate_stage(int selected) {
 
 static void restart_calibration() {
     single_stage=false; calibration_running=true; calibration_waiting=false; calibration_saved=false;
-    memset(eye_open,0,sizeof(eye_open)); memset(eye_closed,0,sizeof(eye_closed));
-    memset(eye_open_sum,0,sizeof(eye_open_sum)); memset(eye_closed_sum,0,sizeof(eye_closed_sum));
-    memset(mouth_shut,0,sizeof(mouth_shut)); memset(mouth_wide,0,sizeof(mouth_wide));
-    memset(mouth_shut_sum,0,sizeof(mouth_shut_sum)); memset(mouth_wide_sum,0,sizeof(mouth_wide_sum));
     for (auto &p : poses) p = PoseSum{};
     eye_good = mouth_good = down_good = false;
     yaw_good[0] = yaw_good[1] = tilt_good[0] = tilt_good[1] = false;
@@ -607,12 +535,19 @@ static void restart_calibration() {
 
 static void face_task(void *)
 {
-    HumanFaceDetect *detect=new(std::nothrow) HumanFaceDetect();
-    if (!detect) { ESP_LOGE(TAG,"Face model allocation failed"); vTaskDelete(nullptr); return; }
-    ESP_LOGI(TAG,"STAGE 4: Wi-Fi dashboard + 9-step guided experiment with 5-point face landmarks");
+    auto *engine=new(std::nothrow) v7::Engine();
+    if (!engine || !engine->init()) {
+        ESP_LOGE(TAG,"Small-model loading failed; check memory and model shapes");
+        if (xSemaphoreTake(g_telemetry_mutex,pdMS_TO_TICKS(40))==pdTRUE) {
+            strcpy(g_telemetry.engine_error,"Small model could not load; inspect serial log");
+            xSemaphoreGive(g_telemetry_mutex);
+        }
+        delete engine;vTaskDelete(nullptr);return;
+    }
+    ESP_LOGI(TAG,"Small models ready: internal free=%u PSRAM free=%u",unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
+    ESP_LOGI(TAG,"SMALL LIVE: 192x192 / 468 landmarks; calibrated geometry; no blendshapes");
     ESP_LOGW(TAG,"STATIONARY TEST ONLY. Keep face toward camera, eyes OPEN, mouth CLOSED.");
-    g_training_boot_id=esp_random();
-    ESP_LOGI(TAG,"Eye/mouth engine: %s",tiny_ai::trained ? "trained tiny classifiers" : "calibration template matching (no trained weights)");
+    ESP_LOGI(TAG,"Eye/mouth: calibrated landmark geometry, entirely on ESP32; fresh calibration required");
     if (!load_calibration()) ESP_LOGI(TAG,"No saved calibration. Tap Calibrate on the dashboard to begin.");
     publish_progress(false);
 
@@ -625,30 +560,59 @@ static void face_task(void *)
         else if (request==-1) restart_calibration();
         else if (request>=0 && request<STAGE_COUNT) recalibrate_stage(request);
         camera_fb_t *fb=esp_camera_fb_get();
-        if (!fb) { publish_training_sample(false); reset_timers(); publish_progress(false); ESP_LOGW(TAG,"Camera frame unavailable"); vTaskDelay(pdMS_TO_TICKS(280));continue; }
+        if (!fb) { reset_timers(); publish_progress(false); ESP_LOGW(TAG,"Camera frame unavailable"); vTaskDelay(pdMS_TO_TICKS(280));continue; }
         capture_preview(fb);
         dl::image::jpeg_img_t jpg={}; jpg.data=(void *)fb->buf; jpg.data_len=fb->len;
         auto img=dl::image::sw_decode_jpeg(jpg,dl::image::DL_IMAGE_PIX_TYPE_RGB888);
         esp_camera_fb_return(fb);
-        if (!img.data) {publish_training_sample(false);reset_timers();publish_progress(false);ESP_LOGW(TAG,"JPEG decode failed");vTaskDelay(pdMS_TO_TICKS(280));continue;}
-        auto &results=detect->run(img);
+        if (!img.data) {reset_timers();publish_progress(false);ESP_LOGW(TAG,"JPEG decode failed");vTaskDelay(pdMS_TO_TICKS(280));continue;}
         bool valid=false,have_eyes=false,have_mouth=false;
         Pose pose={};
-        if (results.size()==1) {
-            const auto &face=*results.begin();
-            if (face.score>=0.65f && face.keypoint.size()>=10 && face.box.size()>=4) {
-                valid=measure(img,face.keypoint.data(),face.box.data(),pose,have_eyes,have_mouth);
+        g_v7_result=v7::Result{};
+        const int64_t inference_start=esp_timer_get_time();
+        if (engine->run(static_cast<const uint8_t *>(img.data),img.width,img.height,g_v7_result)) {
+            const auto &r=g_v7_result;
+            const int ids[5]={33,61,1,263,291};int kp[10],box[4];
+            for(int i=0;i<5;i++){kp[2*i]=int(std::lround(r.points[ids[i]].x));kp[2*i+1]=int(std::lround(r.points[ids[i]].y));}
+            for(int i=0;i<4;i++)box[i]=int(r.box[i]);
+            valid=measure(img,kp,box,pose,have_eyes,have_mouth);
+            if(!valid)g_v7_result.reason="Face geometry rejected by pose checks";
+            if(valid){
+                pose.ear_l=r.left_ear;pose.ear_r=r.right_ear;pose.mouth_ratio=r.mouth_ratio;
+                pose.jaw=r.jaw;pose.blink_l=r.blink_left;pose.blink_r=r.blink_right;
+                have_eyes=have_mouth=true;
+                if(xSemaphoreTake(g_telemetry_mutex,pdMS_TO_TICKS(15))==pdTRUE){
+                    g_telemetry.ear_l=r.left_ear;g_telemetry.ear_r=r.right_ear;g_telemetry.jaw=r.jaw;
+                    g_telemetry.blink_l=r.blink_left;g_telemetry.blink_r=r.blink_right;g_telemetry.mouth_ratio=r.mouth_ratio;
+                    g_telemetry.confidence=r.confidence;g_telemetry.inference_ms=r.inference_ms;
+                    const int overlay_ids[16]={33,160,158,133,153,144,362,385,387,263,373,380,1,13,14,291};
+                    for(int i=0;i<16;i++){g_telemetry.overlay[2*i]=r.points[overlay_ids[i]].x/img.width;g_telemetry.overlay[2*i+1]=r.points[overlay_ids[i]].y/img.height;}
+                    xSemaphoreGive(g_telemetry_mutex);
+                }
             }
         }
+        g_v7_result.inference_ms=(esp_timer_get_time()-inference_start)/1000.f;
+        if(xSemaphoreTake(g_telemetry_mutex,pdMS_TO_TICKS(15))==pdTRUE){
+            snprintf(g_telemetry.face_reason,sizeof(g_telemetry.face_reason),"%s",g_v7_result.reason);
+            g_telemetry.detector_score=g_v7_result.detector_score;
+            g_telemetry.confidence=g_v7_result.confidence;
+            g_telemetry.inference_ms=g_v7_result.inference_ms;
+            g_telemetry.landmark_ms=g_v7_result.landmark_ms;g_telemetry.prelu_ms=g_v7_result.prelu_ms;
+            g_telemetry.preprocess_ms=g_v7_result.preprocess_ms;g_telemetry.expression_ms=g_v7_result.expression_ms;
+            g_telemetry.detector_ms=g_v7_result.detector_ms;
+            xSemaphoreGive(g_telemetry_mutex);
+        }
+        ESP_LOGI(TAG,"PERF total=%.0fms detect=%.0f prep=%.0f landmarks=%.0f (prelu=%.0f) expressions=%.0f",
+            g_v7_result.inference_ms,g_v7_result.detector_ms,g_v7_result.preprocess_ms,
+            g_v7_result.landmark_ms,g_v7_result.prelu_ms,g_v7_result.expression_ms);
         heap_caps_free(img.data);
-        publish_training_sample(valid && have_eyes && have_mouth);
         if (!valid) {
             reset_timers();
             publish_progress(false);
             static int64_t last_warn_us=0;
             const int64_t now=esp_timer_get_time();
             if (now-last_warn_us>2000000) {
-                ESP_LOGW(TAG,"NO USABLE FACE: face lost or landmark/crop invalid. NOT proof of sleeping.");
+                ESP_LOGW(TAG,"FACE WAIT: %s | detector=%.3f landmarks=%.3f time=%.0fms",g_v7_result.reason,g_v7_result.detector_score,g_v7_result.confidence,g_v7_result.inference_ms);
                 last_warn_us=now;
             }
             vTaskDelay(pdMS_TO_TICKS(150));
@@ -657,15 +621,11 @@ static void face_task(void *)
         if (tracking) track_frame(pose,have_eyes,have_mouth);
         else accept_sample(pose,have_eyes,have_mouth);
         publish_progress(true);
-        vTaskDelay(pdMS_TO_TICKS(120));
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 
 
-static bool admin_key_valid(const cJSON *request) {
-    const cJSON *key = cJSON_GetObjectItemCaseSensitive(request,"key");
-    return cJSON_IsString(key) && key->valuestring && strcmp(key->valuestring,g_ap_password)==0;
-}
 static esp_err_t json_reply(httpd_req_t *req, cJSON *doc, int code = 200) {
     if (!doc) { httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Out of memory"); return ESP_FAIL; }
     char *json = cJSON_PrintUnformatted(doc);
@@ -688,8 +648,8 @@ static esp_err_t error_json(httpd_req_t *req, const char *message, int code) {
     return json_reply(req,doc,code);
 }
 static cJSON *post_json(httpd_req_t *req) {
-    if (req->content_len <= 0 || req->content_len > 384) return nullptr;
-    char data[385]; size_t offset=0;
+    if (req->content_len <= 0 || req->content_len > 1536) return nullptr;
+    char data[1537]; size_t offset=0;
     while (offset < static_cast<size_t>(req->content_len)) {
         int n=httpd_req_recv(req,data+offset,req->content_len-offset);
         if (n<=0) return nullptr;
@@ -698,37 +658,6 @@ static cJSON *post_json(httpd_req_t *req) {
     data[offset]='\0';
     return cJSON_Parse(data);
 }
-static esp_err_t training_sample_handler(httpd_req_t *req) {
-    cJSON *doc=post_json(req);
-    if (!doc) return error_json(req,"Invalid JSON",400);
-    if (!admin_key_valid(doc)) {cJSON_Delete(doc);return error_json(req,"Wrong setup access key",403);}
-    cJSON_Delete(doc);
-    TrainingSample sample;
-    if (xSemaphoreTake(g_telemetry_mutex,pdMS_TO_TICKS(15))!=pdTRUE)
-        return error_json(req,"Sample busy; retry",503);
-    sample=g_training_sample;
-    xSemaphoreGive(g_telemetry_mutex);
-    if (!sample.valid || esp_timer_get_time()-sample.at_us>1500000)
-        return error_json(req,"No fresh usable face. Face forward in good light",503);
-    doc=cJSON_CreateObject();
-    if (!doc) return error_json(req,"Memory unavailable",503);
-    cJSON_AddNumberToObject(doc,"schema",tiny_ai::schema);
-    cJSON_AddNumberToObject(doc,"boot_id",g_training_boot_id);
-    cJSON_AddNumberToObject(doc,"sample_id",sample.sample_id);
-    cJSON_AddNumberToObject(doc,"age_ms",(esp_timer_get_time()-sample.at_us)/1000);
-    cJSON *left=cJSON_CreateFloatArray(sample.left_eye,EYE_W*EYE_H);
-    cJSON *right=cJSON_CreateFloatArray(sample.right_eye,EYE_W*EYE_H);
-    cJSON *mouth=cJSON_CreateFloatArray(sample.mouth,MOUTH_N);
-    if (!left || !right || !mouth) {
-        cJSON_Delete(left);cJSON_Delete(right);cJSON_Delete(mouth);cJSON_Delete(doc);
-        return error_json(req,"Memory unavailable",503);
-    }
-    cJSON_AddItemToObject(doc,"left_eye",left);
-    cJSON_AddItemToObject(doc,"right_eye",right);
-    cJSON_AddItemToObject(doc,"mouth",mouth);
-    return json_reply(req,doc);
-}
-
 static esp_err_t index_handler(httpd_req_t *req) {
     httpd_resp_set_type(req,"text/html; charset=utf-8");
     httpd_resp_set_hdr(req,"Cache-Control","no-store");
@@ -747,9 +676,27 @@ static esp_err_t status_handler(httpd_req_t *req) {
     const char *const steps[]={
       "Eyes open", "Eyes closed", "Neutral / mouth closed", "Mouth wide open", "Head down",
       "Turn head left", "Turn head right", "Tilt head left", "Tilt head right"};
+    cJSON_AddStringToObject(doc,"firmware","small-notify-nat-1");
+    const Sharing sharing=g_sharing.load();
+    cJSON_AddBoolToObject(doc,"internet_sharing",sharing==Sharing::Ready&&g_wifi_connected.load());
+    cJSON_AddStringToObject(doc,"sharing_status",sharing_message(sharing));
+    cJSON_AddBoolToObject(doc,"oled_ready",hardware::oled_ready());
+    cJSON_AddBoolToObject(doc,"internet_verified",g_wifi_connected.load()&&hardware::internet_recent());
+    alerts::status(doc);
     cJSON_AddBoolToObject(doc,"face",t.face);
+    cJSON_AddStringToObject(doc,"engine_error",t.engine_error);
+    cJSON_AddStringToObject(doc,"face_reason",t.face_reason);
+    cJSON_AddNumberToObject(doc,"detector_score",t.detector_score);
+    cJSON_AddNumberToObject(doc,"landmark_ms",t.landmark_ms);cJSON_AddNumberToObject(doc,"prelu_ms",t.prelu_ms);
+    cJSON_AddNumberToObject(doc,"preprocess_ms",t.preprocess_ms);cJSON_AddNumberToObject(doc,"expression_ms",t.expression_ms);
+    cJSON_AddNumberToObject(doc,"detector_ms",t.detector_ms);
+    cJSON_AddNumberToObject(doc,"ear_left",t.ear_l);cJSON_AddNumberToObject(doc,"ear_right",t.ear_r);
+    cJSON_AddBoolToObject(doc,"blendshapes_available",false);
+    cJSON_AddNumberToObject(doc,"mouth_ratio",t.mouth_ratio);
+    cJSON_AddNumberToObject(doc,"face_confidence",t.confidence);cJSON_AddNumberToObject(doc,"inference_ms",t.inference_ms);
+    cJSON_AddItemToObject(doc,"overlay",cJSON_CreateFloatArray(t.overlay,32));
     cJSON_AddBoolToObject(doc,"calibrated",t.calibrated);
-    cJSON_AddStringToObject(doc,"eye_mouth_engine",tiny_ai::trained ? "tiny-trained" : "template-matching");
+    cJSON_AddStringToObject(doc,"eye_mouth_engine","mediapipe-468-geometry-esp32");
     cJSON_AddBoolToObject(doc,"calibration_running",t.calibration_running);
     cJSON_AddBoolToObject(doc,"calibration_waiting",t.calibration_waiting);
     cJSON_AddBoolToObject(doc,"calibration_saved",t.calibration_saved);
@@ -820,7 +767,6 @@ static esp_err_t frame_handler(httpd_req_t *req) {
 static esp_err_t wifi_handler(httpd_req_t *req) {
     cJSON *doc=post_json(req);
     if (!doc) return error_json(req,"Invalid JSON",400);
-    if (!admin_key_valid(doc)) {cJSON_Delete(doc);return error_json(req,"Wrong setup access key",403);}
     const cJSON *ssid=cJSON_GetObjectItemCaseSensitive(doc,"ssid");
     const cJSON *pass=cJSON_GetObjectItemCaseSensitive(doc,"password");
     if (!cJSON_IsString(ssid) || !ssid->valuestring || !cJSON_IsString(pass) || !pass->valuestring) {
@@ -853,7 +799,6 @@ static esp_err_t wifi_handler(httpd_req_t *req) {
 static esp_err_t forget_wifi_handler(httpd_req_t *req) {
     cJSON *doc=post_json(req);
     if (!doc) return error_json(req,"Invalid JSON",400);
-    if (!admin_key_valid(doc)) {cJSON_Delete(doc);return error_json(req,"Wrong setup access key",403);}
     cJSON_Delete(doc);
     g_wifi_pending.store(true);
     esp_wifi_disconnect();
@@ -868,7 +813,7 @@ static esp_err_t forget_wifi_handler(httpd_req_t *req) {
 static esp_err_t restart_handler(httpd_req_t *req) {
     cJSON *doc=post_json(req);
     if (!doc) return error_json(req,"Invalid JSON",400);
-    if (!admin_key_valid(doc)) {cJSON_Delete(doc);return error_json(req,"Wrong setup access key",403);}
+    // Calibration buttons are available directly on the local dashboard.
     const cJSON *selected=cJSON_GetObjectItemCaseSensitive(doc,"stage");
     int requested=-1;
     const cJSON *action=cJSON_GetObjectItemCaseSensitive(doc,"action");
@@ -929,8 +874,43 @@ static esp_err_t scan_handler(httpd_req_t *req) {
     }
     free(aps);return json_reply(req,doc);
 }
+static void stop_internet_sharing(){
+    hardware::internet_connection_changed();
+    g_sharing.store(Sharing::Offline);
+    if(g_ap_netif)esp_netif_napt_disable(g_ap_netif);
+}
+static void start_internet_sharing(const esp_netif_ip_info_t &upstream){
+    stop_internet_sharing();
+    esp_netif_ip_info_t ap={};
+    if(!g_ap_netif||esp_netif_get_ip_info(g_ap_netif,&ap)!=ESP_OK){g_sharing.store(Sharing::NatFailed);return;}
+    if(networking::overlapping_subnets(ap.ip.addr,ap.netmask.addr,upstream.ip.addr,upstream.netmask.addr)){
+        g_sharing.store(Sharing::SubnetConflict);ESP_LOGW(TAG,"Hotspot sharing unavailable: upstream subnet overlaps hotspot");return;
+    }
+    esp_netif_dns_info_t dns={};
+    if(esp_netif_get_dns_info(g_sta_netif,ESP_NETIF_DNS_MAIN,&dns)!=ESP_OK||
+       dns.ip.type!=ESP_IPADDR_TYPE_V4||dns.ip.u_addr.ip4.addr==0){
+        dns.ip.type=ESP_IPADDR_TYPE_V4;dns.ip.u_addr.ip4.addr=ESP_IP4TOADDR(1,1,1,1);
+    }
+    // Same DNS/DHCP sequence as ESP-IDF's softap_sta example. Existing clients
+    // may need to renew/rejoin to pick up the new upstream DNS server.
+    const esp_err_t stopped=esp_netif_dhcps_stop(g_ap_netif);
+    if(stopped!=ESP_OK&&stopped!=ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED){
+        g_sharing.store(Sharing::DnsFailed);ESP_LOGW(TAG,"Could not stop hotspot DHCP: %s",esp_err_to_name(stopped));return;
+    }
+    uint8_t offer_dns=0x02;
+    esp_err_t err=esp_netif_dhcps_option(g_ap_netif,ESP_NETIF_OP_SET,ESP_NETIF_DOMAIN_NAME_SERVER,&offer_dns,sizeof(offer_dns));
+    if(err==ESP_OK)err=esp_netif_set_dns_info(g_ap_netif,ESP_NETIF_DNS_MAIN,&dns);
+    const esp_err_t restarted=esp_netif_dhcps_start(g_ap_netif);
+    if(err!=ESP_OK||restarted!=ESP_OK){g_sharing.store(Sharing::DnsFailed);ESP_LOGW(TAG,"Hotspot DNS/DHCP update failed");return;}
+    err=esp_netif_set_default_netif(g_sta_netif);
+    if(err==ESP_OK)err=esp_netif_napt_enable(g_ap_netif);
+    if(err!=ESP_OK){g_sharing.store(Sharing::NatFailed);ESP_LOGW(TAG,"Hotspot NAPT enable failed: %s",esp_err_to_name(err));return;}
+    g_sharing.store(Sharing::Ready);
+    ESP_LOGI(TAG,"HOTSPOT SHARING READY: IPv4 NAT enabled; DNS=" IPSTR,IP2STR(&dns.ip.u_addr.ip4));
+}
 static void wifi_event(void *,esp_event_base_t base,int32_t id,void *data) {
     if (base==WIFI_EVENT && id==WIFI_EVENT_STA_DISCONNECTED) {
+        stop_internet_sharing();
         g_wifi_connected.store(false);
         g_wifi_connecting.store(false);
         if (data) {
@@ -939,11 +919,14 @@ static void wifi_event(void *,esp_event_base_t base,int32_t id,void *data) {
         }
     } else if (base==WIFI_EVENT && id==WIFI_EVENT_STA_CONNECTED) {
         g_wifi_connecting.store(false);
+    } else if (base==IP_EVENT && id==IP_EVENT_STA_LOST_IP) {
+        g_wifi_connected.store(false);stop_internet_sharing();
     } else if (base==IP_EVENT && id==IP_EVENT_STA_GOT_IP) {
         g_wifi_connected.store(true);
         g_wifi_connecting.store(false);
         auto *event=static_cast<ip_event_got_ip_t *>(data);
         ESP_LOGI(TAG,"Wi-Fi connected: " IPSTR,IP2STR(&event->ip_info.ip));
+        start_internet_sharing(event->ip_info);
     }
 }
 static void connection_task(void *) {
@@ -958,9 +941,45 @@ static void connection_task(void *) {
         if (esp_wifi_connect()==ESP_OK) g_wifi_connecting.store(true);
     }
 }
+static esp_err_t notifications_handler(httpd_req_t *req){
+    cJSON *doc=post_json(req);
+    if(!doc)return error_json(req,"Invalid JSON",400);
+    cJSON *response=alerts::request(doc);cJSON_Delete(doc);
+    const bool failed=response&&cJSON_GetObjectItemCaseSensitive(response,"error");
+    return json_reply(req,response,failed?400:200);
+}
+static std::atomic<bool> g_hotspot_restart{false};
+static void apply_hotspot_task(void *){
+    // Wait for the HTTP response to reach the client, then reload saved config.
+    vTaskDelay(pdMS_TO_TICKS(2500));esp_restart();
+}
+static esp_err_t hotspot_handler(httpd_req_t *req){
+    cJSON *doc=post_json(req);
+    if(!doc)return error_json(req,"Invalid JSON",400);
+    const auto *name=cJSON_GetObjectItemCaseSensitive(doc,"ssid");
+    const auto *password=cJSON_GetObjectItemCaseSensitive(doc,"password");
+    hotspot::Settings settings;
+    if(!cJSON_IsString(name)||!cJSON_IsString(password)||strlen(name->valuestring)>32||strlen(password->valuestring)>63){
+        cJSON_Delete(doc);return error_json(req,"Hotspot name must be 1-32 bytes and password 8-63 characters",400);
+    }
+    snprintf(settings.ssid,sizeof(settings.ssid),"%s",name->valuestring);
+    snprintf(settings.password,sizeof(settings.password),"%s",password->valuestring[0]?password->valuestring:g_ap_password);
+    cJSON_Delete(doc);
+    if(!hotspot::valid(settings))return error_json(req,"Use a name of 1-32 bytes and password of 8-63 printable characters",400);
+    if(g_hotspot_restart.exchange(true))return error_json(req,"Hotspot change already pending",409);
+    nvs_handle_t handle;esp_err_t err=nvs_open("safe_road",NVS_READWRITE,&handle);
+    if(err==ESP_OK){err=nvs_set_blob(handle,"ap_settings",&settings,sizeof(settings));if(err==ESP_OK)err=nvs_commit(handle);nvs_close(handle);}
+    if(err!=ESP_OK){g_hotspot_restart.store(false);return error_json(req,"Could not save hotspot settings",503);}
+    if(xTaskCreate(apply_hotspot_task,"ap_restart",2048,nullptr,2,nullptr)!=pdPASS){
+        g_hotspot_restart.store(false);return error_json(req,"Settings saved; manually restart the board to apply",503);
+    }
+    cJSON *response=cJSON_CreateObject();
+    cJSON_AddStringToObject(response,"message","Saved. Device restarts in 2 seconds; reconnect using the new hotspot name and password, then open 192.168.4.1.");
+    return json_reply(req,response);
+}
 static void start_http() {
     httpd_config_t config=HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers=8;
+    config.max_uri_handlers=10;
     config.stack_size=8192;
     config.recv_wait_timeout=7;
     config.send_wait_timeout=7;
@@ -973,19 +992,11 @@ static void start_http() {
         {.uri="/api/scan",.method=HTTP_GET,.handler=scan_handler,.user_ctx=nullptr},
         {.uri="/api/wifi",.method=HTTP_POST,.handler=wifi_handler,.user_ctx=nullptr},
         {.uri="/api/wifi/forget",.method=HTTP_POST,.handler=forget_wifi_handler,.user_ctx=nullptr},
-        {.uri="/api/training/sample",.method=HTTP_POST,.handler=training_sample_handler,.user_ctx=nullptr},
         {.uri="/api/calibration",.method=HTTP_POST,.handler=restart_handler,.user_ctx=nullptr},
+        {.uri="/api/hotspot",.method=HTTP_POST,.handler=hotspot_handler,.user_ctx=nullptr},
+        {.uri="/api/notifications",.method=HTTP_POST,.handler=notifications_handler,.user_ctx=nullptr},
     };
     for (const auto &uri:routes) ESP_ERROR_CHECK(httpd_register_uri_handler(srv,&uri));
-}
-static void load_or_create_ap_password() {
-    // Fixed hotspot password and dashboard key requested for this prototype.
-    strcpy(g_ap_password,"12345678");
-    nvs_handle_t handle;
-    ESP_ERROR_CHECK(nvs_open("safe_road",NVS_READWRITE,&handle));
-    ESP_ERROR_CHECK(nvs_set_str(handle,"ap_pass",g_ap_password));
-    ESP_ERROR_CHECK(nvs_commit(handle));
-    nvs_close(handle);
 }
 static void start_network() {
     esp_err_t err=nvs_flash_init();
@@ -995,19 +1006,27 @@ static void start_network() {
         err=nvs_flash_init();
     }
     ESP_ERROR_CHECK(err);
-    load_or_create_ap_password();
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_ap();
+    g_ap_netif=esp_netif_create_default_wifi_ap();
     g_sta_netif=esp_netif_create_default_wifi_sta();
     wifi_init_config_t init=WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT,ESP_EVENT_ANY_ID,&wifi_event,nullptr));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT,IP_EVENT_STA_GOT_IP,&wifi_event,nullptr));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT,ESP_EVENT_ANY_ID,&wifi_event,nullptr));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     uint8_t mac[6]; ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_AP,mac));
     snprintf(g_ap_ssid,sizeof(g_ap_ssid),"SAFE_ROAD_%02X%02X%02X",mac[3],mac[4],mac[5]);
+    strcpy(g_ap_password,"12345678");
+    nvs_handle_t handle;
+    if(nvs_open("safe_road",NVS_READONLY,&handle)==ESP_OK){
+        hotspot::Settings saved;size_t size=sizeof(saved);
+        if(nvs_get_blob(handle,"ap_settings",&saved,&size)==ESP_OK&&size==sizeof(saved)&&hotspot::valid(saved)){
+            memcpy(g_ap_ssid,saved.ssid,sizeof(g_ap_ssid));memcpy(g_ap_password,saved.password,sizeof(g_ap_password));
+        }
+        nvs_close(handle);
+    }
     wifi_config_t ap={};
     strcpy(reinterpret_cast<char *>(ap.ap.ssid),g_ap_ssid);
     strcpy(reinterpret_cast<char *>(ap.ap.password),g_ap_password);
@@ -1022,15 +1041,28 @@ static void start_network() {
     start_http();
     ESP_LOGW(TAG,"===== SETUP ACCESS =====");
     ESP_LOGW(TAG,"Wi-Fi name: %s",g_ap_ssid);
-    ESP_LOGW(TAG,"Wi-Fi password + dashboard setup key: %s",g_ap_password);
+    ESP_LOGW(TAG,"Hotspot password configured (not logged)");
     ESP_LOGW(TAG,"Dashboard: http://192.168.4.1");
-    ESP_LOGW(TAG,"Access key is needed to change Wi-Fi or restart calibration; do not share it.");
     xTaskCreate(connection_task,"wifi_retry",3072,nullptr,3,nullptr);
 }
 
+static bool hardware_snapshot(hardware::Snapshot &out){
+    if(xSemaphoreTake(g_telemetry_mutex,pdMS_TO_TICKS(5))!=pdTRUE)return false;
+    const auto &t=g_telemetry;
+    out.face=t.face;out.monitoring=t.calibrated;out.calibrating=t.calibration_running;out.waiting=t.calibration_waiting;
+    out.stage=t.stage;out.samples=t.samples;
+    out.age_ms=t.update_us?((esp_timer_get_time()-t.update_us)/1000):-1;
+    out.durations[0]=t.eye_ms;out.durations[1]=t.mouth_ms;out.durations[2]=t.down_ms;out.durations[3]=t.away_ms;out.durations[4]=t.tilt_ms;
+    memcpy(out.eye,t.eye,sizeof(out.eye));out.eye[sizeof(out.eye)-1]=0;
+    memcpy(out.mouth,t.mouth,sizeof(out.mouth));out.mouth[sizeof(out.mouth)-1]=0;
+    out.down=t.head_down;
+    memcpy(out.away,t.away,sizeof(out.away));out.away[sizeof(out.away)-1]=0;
+    memcpy(out.tilt,t.tilt,sizeof(out.tilt));out.tilt[sizeof(out.tilt)-1]=0;
+    xSemaphoreGive(g_telemetry_mutex);out.wifi=g_wifi_connected.load();return true;
+}
 extern "C" void app_main(void)
 {
-    ESP_LOGI(TAG,"S.A.F.E. R.O.A.D. / Standalone Stage 4 Wi-Fi dashboard + multi-behavior EXPERIMENT");
+    ESP_LOGI(TAG,"S.A.F.E. R.O.A.D. / SMALL 468-point camera monitoring EXPERIMENT");
     const size_t psram=heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
     ESP_LOGI(TAG,"PSRAM available: %u MB",(unsigned)(psram/1048576));
     if (psram<2*1024*1024) {ESP_LOGE(TAG,"PSRAM not configured");return;}
@@ -1039,6 +1071,10 @@ extern "C" void app_main(void)
     if (!g_telemetry_mutex || !g_frame_mutex) {ESP_LOGE(TAG,"Mutex allocation failed");return;}
     if (start_camera()!=ESP_OK) {ESP_LOGE(TAG,"Camera initialization failed");return;}
     start_network();
-    if (xTaskCreatePinnedToCore(face_task,"safe_road_s3",16384,nullptr,5,nullptr,1)!=pdPASS)
+    hardware::init(hardware_snapshot);
+    esp_sntp_config_t time_config=ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    if(esp_netif_sntp_init(&time_config)!=ESP_OK)ESP_LOGW(TAG,"Internet time sync could not start; TLS notifications may fail");
+    if(!alerts::init(g_ap_ssid,&g_wifi_connected))ESP_LOGE(TAG,"Cannot start background notifications");
+    if (xTaskCreatePinnedToCore(face_task,"safe_road_s3",20480,nullptr,5,nullptr,1)!=pdPASS)
         ESP_LOGE(TAG,"Cannot create face monitoring task");
 }
