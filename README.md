@@ -8,9 +8,30 @@ ESP32-S3 N16R8 firmware for the OV5640 camera, SH1106 OLED and passive buzzer.
 Face monitoring and buzzer alerts run on the ESP32. The dashboard provides
 camera preview, calibration, Wi-Fi setup, email and webhook settings.
 
-From an ESP-IDF 5.5 terminal in the repository root:
+### First-time setup on Windows
+
+Start with a fresh checkout or source archive of this branch. If transferring
+the source to another laptop, use a Git archive so machine-specific files
+such as `build`, `managed_components`, `dependencies.lock`, and `sdkconfig`
+are generated on the new laptop.
+
+Install ESP-IDF 5.5.6. Connect the board with a USB data cable, then open
+PowerShell as Administrator in the repository root and run:
 
 ```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\install-usb-driver.ps1
+```
+
+The script prints the COM port if Windows already recognizes the board. If
+the port is missing, it downloads the matching driver package from Espressif
+and installs it. It supports native ESP32-S3 USB Serial/JTAG, CP210x, and
+CH340/CH341. Internet access is required for the download.
+
+Open an ESP-IDF 5.5.6 terminal in the repository root. Verify the SDK before
+building and use the COM port printed by the driver script:
+
+```powershell
+idf.py --version
 idf.py -p COM11 flash monitor
 ```
 

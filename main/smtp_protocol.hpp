@@ -38,10 +38,33 @@ template<class Transport> const char *smtp_send(Transport &io,const char *user,c
     if(!command(std::string("MAIL FROM:<")+user+">",250))return "Gmail rejected sender";
     if(!command(std::string("RCPT TO:<")+to+">",250))return "Gmail rejected recipient";
     if(!command("DATA",354))return "Gmail DATA failed";
-    std::string message=std::string("From: <")+user+">\r\nTo: <"+to+">\r\nSubject: SAFE ROAD monitoring event\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n";
+    constexpr char boundary[]="=_safe_road_event";
+    std::string message=std::string("From: <")+user+">\r\nTo: <"+to+">\r\nSubject: SAFE ROAD monitoring event\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\""+boundary+"\"\r\n\r\n--"+boundary+"\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n";
     bool start=true;
     for(char c:body){if(start&&c=='.')message+='.';if(c=='\n'){message+="\r\n";start=true;}else if(c!='\r'){message+=c;start=false;}}
     if(message.size()<2||message.substr(message.size()-2)!="\r\n")message+="\r\n";
+    message+=std::string("--")+boundary+"\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n"
+        "<!doctype html><html lang=\"en\"><body style=\"margin:0;padding:24px;background:#eef2f6;font-family:Arial,sans-serif;color:#182536\">\r\n"
+        "<div style=\"max-width:560px;margin:auto;background:#fff;border:1px solid #d8e1ea;border-radius:12px;overflow:hidden\">\r\n"
+        "<div style=\"background:#152c46;color:#fff;padding:24px\">\r\n"
+        "<p style=\"margin:0 0 8px;color:#a8d9ff;font-size:13px;letter-spacing:2px\">SAFE ROAD</p>\r\n"
+        "<h1 style=\"margin:0;font-size:24px\">Monitoring notification</h1></div>\r\n"
+        "<div style=\"padding:24px;font-size:16px;line-height:1.5\">\r\n";
+    // The plain-text body starts with the brand, which is already in the HTML header.
+    const size_t details=body.find("SAFE ROAD\n")==0?10:0;
+    for(size_t i=details;i<body.size();++i){
+        if(body[i]=='.'&&(i==details||body[i-1]=='\n'))message+='.';
+        switch(body[i]){
+        case '&': message+="&amp;"; break;
+        case '<': message+="&lt;"; break;
+        case '>': message+="&gt;"; break;
+        case '\n': message+="<br>\r\n"; break;
+        case '\r': break;
+        default: message+=body[i]; break;
+        }
+    }
+    message+="</div></div></body></html>\r\n";
+    message+=std::string("--")+boundary+"--\r\n";
     if(!io.write_all(message+".\r\n")||smtp_reply(io)!=250)return "Gmail did not accept message";
     // Acceptance was confirmed; a failed QUIT must not cause duplicate delivery.
     io.write_all("QUIT\r\n");return nullptr;

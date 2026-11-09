@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
+include("$ENV{IDF_PATH}/tools/cmake/version.cmake")
+if(NOT IDF_VERSION_MAJOR EQUAL 5 OR NOT IDF_VERSION_MINOR EQUAL 5 OR IDF_VERSION_PATCH LESS 6)
+    message(FATAL_ERROR "SAFE ROAD requires ESP-IDF 5.5.6 or a newer 5.5 patch. Open that ESP-IDF terminal and use a fresh build folder.")
+endif()
+
 set(COMPONENTS main)
 set(IDF_TARGET "esp32s3")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

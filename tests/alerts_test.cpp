@@ -25,9 +25,11 @@ int main(){
  for(auto bad:{"http://example.com","https://","https:///x","https://user:pass@example.com","https://x.com/\r\nx","https://x.com/#secret"})assert(!https_url(bad));
  assert(base64("f")=="Zg==");assert(base64("fo")=="Zm8=");assert(base64("foo")=="Zm9v");
  const std::string ok="220 ready\r\n250-mail.example\r\n250 AUTH LOGIN\r\n334 user\r\n334 pass\r\n235 authenticated\r\n250 sender\r\n250 recipient\r\n354 data\r\n250 accepted\r\n";
- Transport t{ok,""};assert(!smtp_send(t,"sender@gmail.com","abcdefghijklmnop","to@example.com","Test\n.leading dot\n"));
+ Transport t{ok,""};assert(!smtp_send(t,"sender@gmail.com","abcdefghijklmnop","to@example.com","Test <&>\n.leading dot\n"));
  assert(t.output.find("RCPT TO:<to@example.com>\r\n")!=std::string::npos);
- assert(t.output.find("Test\r\n..leading dot\r\n.\r\nQUIT\r\n")!=std::string::npos);
+ assert(t.output.find("Test <&>\r\n..leading dot\r\n--=_safe_road_event\r\nContent-Type: text/html")!=std::string::npos);
+ assert(t.output.find("Test &lt;&amp;&gt;<br>\r\n..leading dot<br>")!=std::string::npos);
+ assert(t.output.find("--=_safe_road_event--\r\n.\r\nQUIT\r\n")!=std::string::npos);
  assert(t.output.find("abcdefghijklmnop")==std::string::npos);
  Transport rejected{"220 ready\r\n250 ok\r\n334 user\r\n334 pass\r\n535 denied\r\n",""};
  assert(std::string(smtp_send(rejected,"u","p","t","body")).find("authentication")!=std::string::npos);

@@ -6,7 +6,8 @@
 /experiments/
 /training/
 /managed_components/
-/tools/
+/tools/*
+!/tools/install-usb-driver.ps1
 *.log
 *.map
 *.elf
