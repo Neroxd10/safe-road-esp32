@@ -1,4 +1,5 @@
 #include "../main/alert_policy.hpp"
+#include "../main/email_illustrations.hpp"
 #include "../main/smtp_protocol.hpp"
 #ifdef NDEBUG
 #undef NDEBUG
@@ -31,6 +32,15 @@ int main(){
  assert(t.output.find("Test &lt;&amp;&gt;<br>\r\n..leading dot<br>")!=std::string::npos);
  assert(t.output.find("--=_safe_road_event--\r\n.\r\nQUIT\r\n")!=std::string::npos);
  assert(t.output.find("abcdefghijklmnop")==std::string::npos);
+ for (const char *illustration : email_illustrations) {
+     Transport illustrated{ok,""};
+     assert(!smtp_send(illustrated,"u","p","t","Test",illustration));
+     assert(illustrated.output.find("Content-Type: multipart/related;")!=std::string::npos);
+     assert(illustrated.output.find("src=\"cid:detected-event@safe-road.local\"")!=std::string::npos);
+     assert(illustrated.output.find("Content-ID: <detected-event@safe-road.local>")!=std::string::npos);
+     assert(illustrated.output.find(std::string("\r\n\r\n")+illustration+"--=_safe_road_image--\r\n")!=std::string::npos);
+ }
+ assert(t.output.find("multipart/related")==std::string::npos);
  Transport rejected{"220 ready\r\n250 ok\r\n334 user\r\n334 pass\r\n535 denied\r\n",""};
  assert(std::string(smtp_send(rejected,"u","p","t","body")).find("authentication")!=std::string::npos);
  assert(rejected.output.find("MAIL FROM")==std::string::npos);

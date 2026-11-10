@@ -1,5 +1,6 @@
 #include "alerts.hpp"
 #include "alert_policy.hpp"
+#include "email_illustrations.hpp"
 #include "smtp_protocol.hpp"
 #include <cstring>
 #include <ctime>
@@ -75,9 +76,11 @@ static std::string event_body(const Item &item){
     return body;
 }
 static void send_email(const Config &c,const Item &item){
+    static_assert(sizeof(email_illustrations)/sizeof(email_illustrations[0])==event_count);
+    const char *illustration=item.event>=0&&item.event<event_count?email_illustrations[item.event]:nullptr;
     TlsTransport transport;
     if(!transport.connect()){result(true,"Gmail TLS connection failed; check internet and clock");return;}
-    const char *err=smtp_send(transport,c.user,c.password,c.recipient,event_body(item));
+    const char *err=smtp_send(transport,c.user,c.password,c.recipient,event_body(item),illustration);
     result(true,err?err:"Email accepted by Gmail");
 }
 static void send_webhook(const Config &c,const Item &item){

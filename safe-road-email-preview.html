@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SAFE ROAD email preview</title>
+</head>
+<body style="margin:0;padding:24px;background:#fff1f2;font-family:Arial,sans-serif;color:#3b2024">
+  <nav aria-label="Choose a detection to preview" style="max-width:560px;margin:0 auto 16px">
+    <label for="detection" style="font-weight:bold">Preview detection</label>
+    <select id="detection" style="margin:8px 0;padding:8px;color:#3b2024">
+      <option>Eyes closed-like</option>
+      <option>Mouth open-like</option>
+      <option>Head down-like</option>
+      <option>Looking away-like</option>
+      <option>Head tilt-like</option>
+    </select>
+  </nav>
+  <div style="max-width:560px;margin:auto;background:#fff;border:1px solid #efc5ca;border-radius:16px;overflow:hidden">
+    <div style="background:#a11228;color:#fff;padding:28px 24px;border-bottom:5px solid #ed5367">
+      <p style="display:inline-block;margin:0 0 12px;padding:5px 9px;background:#750d20;color:#fff;font-size:12px;font-weight:bold;letter-spacing:2px;border-radius:4px">SAFE ROAD</p>
+      <h1 style="margin:0;font-size:28px;line-height:1.2">Monitoring notification</h1>
+    </div>
+    <div style="padding:24px;font-size:15px;line-height:1.6">
+      <div style="margin:0 0 24px;padding:18px;text-align:center;background:#fff1f2;border:1px solid #efc5ca;border-radius:12px">
+        <svg width="168" height="116" viewBox="0 0 168 116" role="img" aria-labelledby="eye-title">
+          <title id="eye-title">Illustrated face with both eyes closed</title>
+          <circle cx="84" cy="58" r="47" fill="#ffdce1"/>
+          <path d="M24 39V18h21m78 0h21v21m0 38v21h-21m-78 0H24V77" fill="none" stroke="#d54b60" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          <path id="features" d="M50 50q12 15 24 0m20 0q12 15 24 0M76 77h16" fill="none" stroke="#a11228" stroke-width="4" stroke-linecap="round"/>
+          <path id="cue" d="m54 55-4 6m20-6 4 6m24-6-4 6m20-6 4 6" fill="none" stroke="#a11228" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <h2 style="margin:0 0 12px;padding-bottom:8px;border-bottom:1px solid #efc5ca;color:#a11228;font-size:15px">Event details</h2>
+      Device: SAFE_ROAD_123456<br>
+      Event: <span id="event-label">Eyes closed-like</span><br>
+      Observed duration: 2.400 seconds<br>
+      Device uptime: 124.000 seconds<br>
+      <br>
+      Experimental camera-based monitoring event; not a confirmed drowsiness or yawn diagnosis.
+    </div>
+  </div>
+  <script>
+    const illustrations = [
+      ['Face with both eyes closed', 'M50 50q12 15 24 0m20 0q12 15 24 0M76 77h16', 'm54 55-4 6m20-6 4 6m24-6-4 6m20-6 4 6'],
+      ['Face with an open mouth', 'M61 49h1m44 0h1M96 76a12 15 0 1 1-24 0a12 15 0 1 1 24 0', 'M54 39q7-5 14 0m32 0q7-5 14 0'],
+      ['Face angled down with a downward arrow', 'M59 64q7 6 14 0m22 0q7 6 14 0M77 85h14', 'M84 26v22m-7-7 7 7 7-7'],
+      ['Face looking to the side with a rightward arrow', 'M77 49q8-9 16 0m11 0q8-9 16 0M96 75h13', 'M57 48v2m48 11h22m-7-7 7 7-7 7'],
+      ['Face tilted sideways with a curved arrow', 'M58 48h1m48 0h1M76 76q8 5 16 0', 'M44 75q-11-20 0-38m-8 3 8-3 3 8', 'rotate(23 84 58)']
+    ];
+
+    const selector = document.getElementById('detection');
+    selector.addEventListener('change', () => {
+      const [description, features, cue, rotation = ''] = illustrations[selector.selectedIndex];
+      document.getElementById('eye-title').textContent = description;
+      document.getElementById('event-label').textContent = selector.value;
+      const face = document.getElementById('features');
+      face.setAttribute('d', features);
+      face.setAttribute('transform', rotation);
+      document.getElementById('cue').setAttribute('d', cue);
+    });
+  </script>
+</body>
+</html>
