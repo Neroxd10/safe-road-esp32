@@ -40,6 +40,7 @@ inline void glyph(char c,uint8_t *out){
  case '8': {const uint8_t v[5]={54,73,73,73,54};for(int i=0;i<5;i++)out[i]=v[i];break;}
  case '9': {const uint8_t v[5]={6,73,73,73,62};for(int i=0;i<5;i++)out[i]=v[i];break;}
  case ':': {const uint8_t v[5]={0,0,54,0,0};for(int i=0;i<5;i++)out[i]=v[i];break;}
+ case '!': out[2]=0x5f;break;
  case '-': {const uint8_t v[5]={8,8,8,8,8};for(int i=0;i<5;i++)out[i]=v[i];break;}
  case '/': {const uint8_t v[5]={64,48,8,6,1};for(int i=0;i<5;i++)out[i]=v[i];break;}
  case ' ': {const uint8_t v[5]={0,0,0,0,0};for(int i=0;i<5;i++)out[i]=v[i];break;}

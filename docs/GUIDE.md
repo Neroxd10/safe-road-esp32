@@ -103,10 +103,9 @@ separate from camera processing. The OLED displays one active alert at a time.
 
 For step-by-step setup, see [Gmail SMTP and MacroDroid webhooks](NOTIFICATIONS.md).
 
-The OLED rotates the connected Wi-Fi name, internet verification, and enabled
-email/webhook channels. Internet verification uses a certificate-checked HTTPS
-probe after clock sync. The ON/OFF labels show channel settings. Use the
-dashboard delivery messages to check whether a test was accepted.
+The OLED shows the connected Wi-Fi name and the dashboard address. During live
+monitoring it displays MONITORING or ALERT! with the active detection below it.
+The dashboard shows internet verification and email and webhook delivery status.
 
 ## Where the code lives
 

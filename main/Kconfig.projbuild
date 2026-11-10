@@ -11,4 +11,12 @@ config SAFE_ROAD_BUZZER_GPIO
 config SAFE_ROAD_BUZZER_ACTIVE
     bool "Use active buzzer instead of selected passive module"
     default n
+config SAFE_ROAD_BUZZER_FREQUENCY_HZ
+    int "Passive buzzer frequency (Hz)"
+    depends on !SAFE_ROAD_BUZZER_ACTIVE
+    range 1000 5000
+    default 2400
+    help
+        Set the drive frequency to the buzzer's rated resonant frequency
+        for the strongest tone.
 endmenu

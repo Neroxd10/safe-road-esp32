@@ -2,12 +2,12 @@
 #include "alerts.hpp"
 #include "hardware_policy.hpp"
 #include "oled_font.hpp"
+#include "esp_wifi.h"
 #include "sdkconfig.h"
 #include "driver/i2c_master.h"
 #include "driver/ledc.h"
 #include "driver/gpio.h"
 #include "esp_http_client.h"
-#include "esp_wifi.h"
 #include "esp_crt_bundle.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -26,7 +26,6 @@ static std::atomic<bool> display_ok{false};
 static std::atomic<int64_t> internet_at{0};
 static std::atomic<unsigned> internet_generation{0};
 static std::atomic<unsigned> verified_generation{0};
-static std::atomic<bool> probe_failed{false};
 static bool buzzer_ok=false;
 static constexpr int pin=CONFIG_SAFE_ROAD_BUZZER_GPIO;
 static_assert(CONFIG_SAFE_ROAD_OLED_SDA!=CONFIG_SAFE_ROAD_OLED_SCL);
@@ -83,55 +82,37 @@ static void init_oled(){
  if(initialized==ESP_OK)ESP_LOGI("HARDWARE","SH1106 setup commands sent successfully");
  else ESP_LOGW("HARDWARE","OLED responded to probe but SH1106 setup transfer failed: %s",esp_err_to_name(initialized));
 }
-static void line(uint8_t *buffer,int row,const char *s){
- for(int x=0;s[x]&&x<21;x++)glyph(s[x],buffer+row*128+x*6);
+static void line(uint8_t *buffer,int row,const char *s,bool centered=false){
+ const int length=strnlen(s,21);
+ const int start=centered?(128-length*6+1)/2:0;
+ for(int x=0;x<length;x++)glyph(s[x],buffer+row*128+start+x*6);
 }
-static const char *eye(const char *s){return !strcmp(s,"OPEN-LIKE")?"OPEN":!strcmp(s,"CLOSED-LIKE")?"CLOSED":"UNKNOWN";}
 static void draw(const Snapshot &s,int event){
  uint8_t frame[1024]={};char text[32];
  line(frame,0,"SAFE ROAD");
- switch((esp_timer_get_time()/3000000)%3){
- case 0:{
-  wifi_ap_record_t ap={};
-  if(s.wifi&&esp_wifi_sta_get_ap_info(&ap)==ESP_OK){
-   char ssid[16]={};
-   for(size_t i=0;i<sizeof(ssid)-1&&ap.ssid[i];i++){
-    const auto c=ap.ssid[i];
-    ssid[i]=c>='a'&&c<='z'?char(c-'a'+'A'):c>=32&&c<=126?char(c):'-';
-   }
-   snprintf(text,sizeof(text),"WIFI: %s",ssid);line(frame,1,text);
-  }else line(frame,1,"WIFI: OFFLINE");
-  break;
- }
- case 1:
-  line(frame,1,!s.wifi?"INTERNET: OFFLINE":internet_recent()?"INTERNET: VERIFIED":
-       time(nullptr)<1700000000?"INTERNET: SYNC CLOCK":probe_failed.load()?"INTERNET: UNVERIFIED":"INTERNET: CHECKING");
-  break;
- default:{
-  bool email=false,webhook=false;
-  if(alerts::enabled_channels(email,webhook)){
-   snprintf(text,sizeof(text),"EMAIL:%s WEBHOOK:%s",email?"ON":"OFF",webhook?"ON":"OFF");
-   line(frame,1,text);
-  }else line(frame,1,"EMAIL/WEBHOOK: WAIT");
-  break;
- }
- }
+ wifi_ap_record_t ap={};
+ if(s.wifi&&esp_wifi_sta_get_ap_info(&ap)==ESP_OK){
+  char ssid[16]={};
+  for(size_t i=0;i<sizeof(ssid)-1&&ap.ssid[i];i++){
+   const auto c=ap.ssid[i];
+   ssid[i]=c>='a'&&c<='z'?char(c-'a'+'A'):c>=32&&c<=126?char(c):'-';
+  }
+  snprintf(text,sizeof(text),"WIFI: %s",ssid);
+  line(frame,1,text);
+ }else line(frame,1,"WIFI: OFFLINE");
  if(s.calibrating){snprintf(text,sizeof(text),"CALIBRATE %d/9 %d/12",s.stage+1,s.samples);line(frame,2,text);line(frame,3,s.waiting?"TAP READY ON PHONE":"HOLD POSE");}
  else if(!s.monitoring)line(frame,2,"TAP CALIBRATE");
  else if(s.age_ms<0||s.age_ms>=2500)line(frame,2,"WAITING FOR CAMERA");
  else line(frame,2,s.face?"FACE: DETECTED":"FACE: NOT DETECTED");
  const bool live=!s.calibrating&&s.monitoring&&s.face&&s.age_ms>=0&&s.age_ms<2500;
  if(live){
-  const char *eyes=eye(s.eye);
-  const char *mouth=!strcmp(s.mouth,"OPEN-LIKE")?"OPEN":!strcmp(s.mouth,"SHUT-LIKE")?"CLOSED":"-";
-  snprintf(text,sizeof(text),"EYES:%s M:%s",!strcmp(eyes,"UNKNOWN")?"-":eyes,mouth);
-  line(frame,3,text);
-  snprintf(text,sizeof(text),"HEAD DOWN: %s",s.down?"YES":"NO");line(frame,4,text);
-  snprintf(text,sizeof(text),"HEAD TILT: %s",s.tilt);line(frame,5,text);
-  snprintf(text,sizeof(text),"LOOKING AWAY: %s",s.away);line(frame,6,text);
+  constexpr const char *labels[]={"EYES CLOSED","MOUTH OPEN","HEAD DOWN","LOOKING AWAY","HEAD TILT"};
+  if(event>=0){
+   line(frame,4,"ALERT!",true);
+   line(frame,5,labels[event],true);
+  }else line(frame,4,"MONITORING",true);
  }
- constexpr const char *labels[]={"ALERT: EYES CLOSED","ALERT: MOUTH OPEN","ALERT: HEAD DOWN","ALERT: LOOKING AWAY","ALERT: HEAD TILT"};
- line(frame,7,event>=0?labels[event]:"192.168.4.1");
+ line(frame,7,"192.168.4.1");
  for(int page=0;page<8;page++){
   // Reposition each chunk so a retry can redraw the entire frame.
   constexpr int chunk_size=32;
@@ -161,7 +142,7 @@ static void init_buzzer(){
 #ifdef CONFIG_SAFE_ROAD_BUZZER_ACTIVE
  buzzer_ok=true;
 #else
- ledc_timer_config_t timer={};timer.speed_mode=LEDC_LOW_SPEED_MODE;timer.timer_num=LEDC_TIMER_1;timer.duty_resolution=LEDC_TIMER_10_BIT;timer.freq_hz=2400;timer.clk_cfg=LEDC_AUTO_CLK;
+ ledc_timer_config_t timer={};timer.speed_mode=LEDC_LOW_SPEED_MODE;timer.timer_num=LEDC_TIMER_1;timer.duty_resolution=LEDC_TIMER_10_BIT;timer.freq_hz=CONFIG_SAFE_ROAD_BUZZER_FREQUENCY_HZ;timer.clk_cfg=LEDC_AUTO_CLK;
  ledc_channel_config_t channel={};channel.gpio_num=pin;channel.speed_mode=LEDC_LOW_SPEED_MODE;channel.channel=LEDC_CHANNEL_1;channel.timer_sel=LEDC_TIMER_1;channel.duty=1023;
  buzzer_ok=ledc_timer_config(&timer)==ESP_OK&&ledc_channel_config(&channel)==ESP_OK;
 #endif
@@ -182,7 +163,6 @@ static void task(void *){
 void internet_connection_changed(){
  internet_generation.fetch_add(1);
  internet_at.store(0);
- probe_failed.store(false);
 }
 static void internet_task(void *){
  unsigned generation=internet_generation.load();
@@ -208,7 +188,6 @@ static void internet_task(void *){
     const bool verified=result==ESP_OK&&status==204;
     verified_generation.store(generation);
     internet_at.store(verified?esp_timer_get_time()/1000:0);
-    probe_failed.store(!verified);
     if(!verified)ESP_LOGW("HARDWARE","Internet probe failed: %s HTTP %d",esp_err_to_name(result),status);
     next_check=esp_timer_get_time()/1000+(verified?30000:10000);
    }
