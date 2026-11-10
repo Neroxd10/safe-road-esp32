@@ -17,11 +17,14 @@ vm.createContext(ctx);vm.runInContext(html.split('<script>')[1].split('</script>
  await click('restart');assert.equal(requests.at(-1).key,undefined);assert.equal(requests.at(-1).action,undefined);requests.length=0;
  await click('loadAlerts');assert.equal($('emailFrom').value,saved.email);assert.equal($('appPassword').value,'');assert.equal($('webhookUrl').value,'');assert.match($('appPassword').placeholder,/Saved/);
  assert.equal($('hold0').value,2);$('hold0').value='4.5';
+ assert.equal($('notifyEvery').value,1);$('notifyEvery').value='2';
  $('emailEnabled').checked=true;$('appPassword').value='abcd efgh ijkl mnop';await click('saveAlerts');let sent=requests.at(-1);
  assert.equal(sent.app_password,'abcdefghijklmnop');assert.equal(sent.events,1);assert.deepEqual(sent.hold_ms,[4500,4000,3000,3500,5000]);assert.equal(sent.webhook_url,'');assert.equal($('appPassword').value,'');
+ assert.equal(sent.notify_every,2);
  await click('saveAlerts');assert.equal(requests.at(-1).app_password,'');assert.equal(requests.at(-1).webhook_url,'');
  fail=true;$('appPassword').value='keepme';await click('saveAlerts');assert.equal($('appPassword').value,'keepme');assert.equal($('alertMessage').textContent,'Invalid settings');
  vm.runInContext('update('+JSON.stringify(sample)+')',ctx);assert.equal($('emailDelivery').textContent,'Email accepted by Gmail');assert.match($('deliveryNetwork').textContent,/ready/);
+ sample.notifications.detection_counts=[2,1,0,0,0];vm.runInContext('update('+JSON.stringify(sample)+')',ctx);assert.match($('detectionCounts').textContent,/Eyes closed 2 · Mouth open 1/);
  sample.wifi_connected=false;vm.runInContext('update('+JSON.stringify(sample)+')',ctx);assert.match($('deliveryNetwork').textContent,/Offline/);
  fail=false;$('ssid').value='Test network';$('pwd').value='test-password';await click('connect');assert.equal(requests.at(-1).ssid,'Test network');await click('forget');await click('testEmail');assert.equal(requests.at(-1).action,'test_email');await click('testWebhook');assert.equal(requests.at(-1).action,'test_webhook');
  assert(requests.every(r=>!Object.hasOwn(r,'key')));

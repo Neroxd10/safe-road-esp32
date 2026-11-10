@@ -11,12 +11,18 @@ inline bool valid_hold_ms(int value){return value>=500&&value<=60000;}
 struct Gate {
     bool fired[event_count]={};
     int64_t last[event_count]={};
-    bool take(int event,int64_t duration,int64_t now,int cooldown_seconds,int threshold_ms=-1){
+    bool qualify(int event,int64_t duration,int threshold_ms=-1){
         if(duration<=0){fired[event]=false;return false;}
         if(duration<(threshold_ms<0?thresholds[event]:threshold_ms)||fired[event])return false;
         fired[event]=true;
+        return true;
+    }
+    bool allow(int event,int64_t now,int cooldown_seconds){
         if(last[event]&&now-last[event]<int64_t(cooldown_seconds)*1000)return false;
         last[event]=now;return true;
+    }
+    bool take(int event,int64_t duration,int64_t now,int cooldown_seconds,int threshold_ms=-1){
+        return qualify(event,duration,threshold_ms)&&allow(event,now,cooldown_seconds);
     }
     void reset(){for(auto &v:fired)v=false;}
 };

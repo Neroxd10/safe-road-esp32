@@ -21,10 +21,12 @@ struct Config {
     uint32_t events=31,cooldown=60;
     char user[96]={},recipient[96]={},password[33]={},url[512]={};
 };
-struct Item {uint32_t revision;int event;int64_t duration,created;uint8_t channels;};
+struct Item {uint32_t revision;int event;int64_t duration,created;uint8_t channels;uint32_t count;};
 static Config config;
 static int hold_ms[5]={1500,3000,2500,2500,2500};
 static uint32_t revision=1;
+static uint32_t notify_every=1;
+static std::atomic<uint32_t> detection_counts[event_count]{};
 static SemaphoreHandle_t mutex=nullptr;
 static QueueHandle_t queue=nullptr;
 static std::atomic<bool> *online=nullptr;
@@ -70,9 +72,11 @@ struct TlsTransport {
 };
 static std::string event_body(const Item &item){
     char body[512];
+    char count_line[64]={};
+    if(item.event>=0)snprintf(count_line,sizeof(count_line),"Detections of this type since boot: %lu\n",static_cast<unsigned long>(item.count));
     const char *label=item.event<0?"Test notification":event_labels[item.event];
-    snprintf(body,sizeof(body),"SAFE ROAD\nDevice: %s\nEvent: %s\nObserved duration: %.3f seconds\nDevice uptime: %.3f seconds\n\nExperimental camera-based monitoring event; not a confirmed drowsiness or yawn diagnosis.\n",
-        device,label,double(item.duration)/1000.0,double(item.created)/1000.0);
+    snprintf(body,sizeof(body),"SAFE ROAD\nDevice: %s\nEvent: %s\n%sObserved duration: %.3f seconds\nDevice uptime: %.3f seconds\n\nExperimental camera-based monitoring event; not a confirmed drowsiness or yawn diagnosis.\n",
+        device,label,count_line,double(item.duration)/1000.0,double(item.created)/1000.0);
     return body;
 }
 static void send_email(const Config &c,const Item &item){
@@ -87,6 +91,7 @@ static void send_webhook(const Config &c,const Item &item){
     cJSON *doc=cJSON_CreateObject();if(!doc){result(false,"Out of memory");return;}
     cJSON_AddStringToObject(doc,"device",device);
     cJSON_AddStringToObject(doc,"event",item.event<0?"test":event_names[item.event]);
+    if(item.event>=0)cJSON_AddNumberToObject(doc,"detection_count",item.count);
     cJSON_AddNumberToObject(doc,"duration_ms",double(item.duration));
     cJSON_AddNumberToObject(doc,"uptime_ms",double(item.created));
     cJSON_AddBoolToObject(doc,"experimental",true);
@@ -131,7 +136,7 @@ bool init(const char *id,std::atomic<bool> *connected){
         Config saved;size_t size=sizeof(saved);
         if(nvs_get_blob(handle,"config",&saved,&size)==ESP_OK&&size==sizeof(saved)&&saved.version==1){
             saved.user[95]=saved.recipient[95]=saved.password[32]=saved.url[511]=0;
-            if(saved.cooldown>=30&&saved.cooldown<=3600&&saved.events<=31&&
+            if(saved.cooldown<=3600&&saved.events<=31&&
                (!saved.email||(email_address(saved.user)&&email_address(saved.recipient)&&strlen(saved.password)==16))&&
                (!saved.webhook||https_url(saved.url)))config=saved;
         }
@@ -140,6 +145,8 @@ bool init(const char *id,std::atomic<bool> *connected){
             bool valid=true;for(int value:saved_hold)valid=valid&&valid_hold_ms(value);
             if(valid)memcpy(hold_ms,saved_hold,sizeof(hold_ms));
         }
+        uint32_t saved_every;
+        if(nvs_get_u32(handle,"notify_every",&saved_every)==ESP_OK&&saved_every>=1&&saved_every<=100)notify_every=saved_every;
         nvs_close(handle);
     }
     const bool ok=xTaskCreate(worker,"notifications",10240,nullptr,2,nullptr)==pdPASS;
@@ -153,14 +160,17 @@ void reset_episode(){reset_generation.fetch_add(1);}
 void observe(const int64_t durations[5]){
     if(!started.load())return;
     const auto generation=reset_generation.load();if(generation!=seen_generation){gate.reset();seen_generation=generation;}
-    Config c;uint32_t rev;int limits[5];
+    Config c;uint32_t rev,every;int limits[5];
     if(!lock())return;
-    c=config;rev=revision;memcpy(limits,hold_ms,sizeof(limits));unlock();
+    c=config;rev=revision;every=notify_every;memcpy(limits,hold_ms,sizeof(limits));unlock();
     const int64_t now=esp_timer_get_time()/1000;
     const uint8_t channels=(c.email?1:0)|(c.webhook?2:0);
-    for(int i=0;i<event_count;i++)if(gate.take(i,durations[i],now,c.cooldown,limits[i])&&(c.events&(1u<<i))&&channels){
+    for(int i=0;i<event_count;i++){
+        if(!gate.qualify(i,durations[i],limits[i])||!(c.events&(1u<<i)))continue;
+        const uint32_t count=++detection_counts[i];
+        if(!channels||count%every||!gate.allow(i,now,c.cooldown))continue;
         if(!ready()){if(c.email)result(true,"Offline; monitoring continues");if(c.webhook)result(false,"Offline; monitoring continues");continue;}
-        Item item{rev,i,durations[i],now,channels};
+        Item item{rev,i,durations[i],now,channels,count};
         if(xQueueSend(queue,&item,0)!=pdTRUE){if(c.email)result(true,"Notification queue full");if(c.webhook)result(false,"Notification queue full");}
     }
 }
@@ -174,18 +184,19 @@ cJSON *request(cJSON *doc){
     if(!started.load())return error("Notifications unavailable");
     auto *action=cJSON_GetObjectItemCaseSensitive(doc,"action");if(!cJSON_IsString(action))return error("Action required");
     if(!lock())return error("Settings busy; retry");
-    Config next=config;uint32_t rev=revision;int next_hold[5];memcpy(next_hold,hold_ms,sizeof(next_hold));unlock();
+    Config next=config;uint32_t rev=revision,next_every=notify_every;int next_hold[5];memcpy(next_hold,hold_ms,sizeof(next_hold));unlock();
     if(!strcmp(action->valuestring,"load")){
         auto *out=cJSON_CreateObject();cJSON_AddBoolToObject(out,"email_enabled",next.email);cJSON_AddBoolToObject(out,"webhook_enabled",next.webhook);
         cJSON_AddStringToObject(out,"email",next.user);cJSON_AddStringToObject(out,"recipient",next.recipient);
         cJSON_AddBoolToObject(out,"password_saved",next.password[0]);cJSON_AddBoolToObject(out,"webhook_saved",next.url[0]);
+        cJSON_AddNumberToObject(out,"notify_every",next_every);
         cJSON_AddNumberToObject(out,"events",next.events);cJSON_AddNumberToObject(out,"cooldown",next.cooldown);cJSON_AddItemToObject(out,"hold_ms",cJSON_CreateIntArray(next_hold,5));return out;
     }
     if(!strcmp(action->valuestring,"test_email")||!strcmp(action->valuestring,"test_webhook")){
         const bool email=!strcmp(action->valuestring,"test_email");
         if(!ready())return error("Connect the device to internet Wi-Fi first");
         if((email&&!next.email)||(!email&&!next.webhook))return error("Enable and save this channel first");
-        Item item{rev,-1,0,esp_timer_get_time()/1000,uint8_t(email?1:2)};
+        Item item{rev,-1,0,esp_timer_get_time()/1000,uint8_t(email?1:2),0};
         if(xQueueSend(queue,&item,0)!=pdTRUE)return error("Notification queue full; retry shortly");
         result(email,"Test queued");auto *out=cJSON_CreateObject();cJSON_AddStringToObject(out,"message","Test queued; check delivery status below");return out;
     }
@@ -195,8 +206,12 @@ cJSON *request(cJSON *doc){
        !string(doc,"app_password",next.password,sizeof(next.password),true)||!string(doc,"webhook_url",next.url,sizeof(next.url),true))return error("Invalid settings fields");
     auto *events=cJSON_GetObjectItemCaseSensitive(doc,"events"),*cooldown=cJSON_GetObjectItemCaseSensitive(doc,"cooldown");
     if(!cJSON_IsNumber(events)||events->valuedouble!=events->valueint||events->valueint<0||events->valueint>31||
-       !cJSON_IsNumber(cooldown)||cooldown->valuedouble!=cooldown->valueint||cooldown->valueint<30||cooldown->valueint>3600)return error("Choose events and a cooldown from 30 to 3600 seconds");
+       !cJSON_IsNumber(cooldown)||cooldown->valuedouble!=cooldown->valueint||cooldown->valueint<0||cooldown->valueint>3600)return error("Choose events and a cooldown from 0 to 3600 seconds");
     next.events=events->valueint;next.cooldown=cooldown->valueint;
+    if(auto *every=cJSON_GetObjectItemCaseSensitive(doc,"notify_every")){
+        if(!cJSON_IsNumber(every)||every->valuedouble!=every->valueint||every->valueint<1||every->valueint>100)return error("Notify every 1 to 100 detections");
+        next_every=every->valueint;
+    }
     auto *holds=cJSON_GetObjectItemCaseSensitive(doc,"hold_ms");
     if(!cJSON_IsArray(holds)||cJSON_GetArraySize(holds)!=5)return error("Set a hold time for each detection");
     for(int i=0;i<5;i++){
@@ -210,10 +225,10 @@ cJSON *request(cJSON *doc){
     if(next.webhook&&!https_url(next.url))return error("Webhook must be an HTTPS URL without user info or fragment");
     nvs_handle_t handle;esp_err_t err=nvs_open("sr_alerts",NVS_READWRITE,&handle);
     if(err!=ESP_OK)return error("Could not open saved settings");
-    err=nvs_set_blob(handle,"config",&next,sizeof(next));if(err==ESP_OK)err=nvs_set_blob(handle,"hold_ms",next_hold,sizeof(next_hold));if(err==ESP_OK)err=nvs_commit(handle);nvs_close(handle);
+    err=nvs_set_blob(handle,"config",&next,sizeof(next));if(err==ESP_OK)err=nvs_set_blob(handle,"hold_ms",next_hold,sizeof(next_hold));if(err==ESP_OK)err=nvs_set_u32(handle,"notify_every",next_every);if(err==ESP_OK)err=nvs_commit(handle);nvs_close(handle);
     if(err!=ESP_OK)return error("Could not save notification settings");
     if(!lock())return error("Settings saved; reload to confirm");
-    config=next;memcpy(hold_ms,next_hold,sizeof(hold_ms));++revision;unlock();reset_episode();
+    config=next;notify_every=next_every;memcpy(hold_ms,next_hold,sizeof(hold_ms));++revision;unlock();
     auto *out=cJSON_CreateObject();cJSON_AddStringToObject(out,"message","Notification settings saved on device");return out;
 }
 bool enabled_channels(bool &email,bool &webhook){
@@ -228,6 +243,8 @@ void status(cJSON *doc){
     auto *out=cJSON_AddObjectToObject(doc,"notifications");
     cJSON_AddBoolToObject(out,"email_enabled",config.email);cJSON_AddBoolToObject(out,"webhook_enabled",config.webhook);
     cJSON_AddStringToObject(out,"email_status",email_result);cJSON_AddStringToObject(out,"webhook_status",webhook_result);
+    auto *counts=cJSON_AddArrayToObject(out,"detection_counts");
+    if(counts)for(auto &count:detection_counts)cJSON_AddItemToArray(counts,cJSON_CreateNumber(count.load()));
     cJSON_AddBoolToObject(out,"clock_ready",time(nullptr)>=1700000000);unlock();
 }
 }
