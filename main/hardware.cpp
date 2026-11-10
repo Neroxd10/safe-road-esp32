@@ -89,7 +89,7 @@ static void line(uint8_t *buffer,int row,const char *s,bool centered=false){
  for(int x=0;x<length;x++)glyph(s[x],buffer+row*128+start+x*6);
 }
 static void draw_caution(uint8_t *frame){
- constexpr int center=64,top=24,height=15,half_base=12;
+ constexpr int center=64,top=7,height=27,half_base=19;
  auto pixel=[frame](int x,int y){frame[(y/8)*128+x]|=uint8_t(1u<<(y%8));};
  for(int y=0;y<height;y++){
   const int half_width=y*half_base/(height-1);
@@ -97,36 +97,44 @@ static void draw_caution(uint8_t *frame){
   pixel(center+half_width,top+y);
  }
  for(int x=center-half_base;x<=center+half_base;x++)pixel(x,top+height-1);
- for(int y=top+5;y<=top+9;y++)pixel(center,y);
- pixel(center,top+11);
+ for(int y=top+9;y<=top+17;y++)pixel(center,y);
+ pixel(center,top+21);
 }
 static void draw(const Snapshot &s,int event){
- uint8_t frame[1024]={};char text[32];
- line(frame,0,"SAFE ROAD");
- wifi_ap_record_t ap={};
- if(s.wifi&&esp_wifi_sta_get_ap_info(&ap)==ESP_OK){
-  char ssid[16]={};
-  for(size_t i=0;i<sizeof(ssid)-1&&ap.ssid[i];i++){
-   const auto c=ap.ssid[i];
-   ssid[i]=c>='a'&&c<='z'?char(c-'a'+'A'):c>=32&&c<=126?char(c):'-';
-  }
-  snprintf(text,sizeof(text),"WIFI: %s",ssid);
-  line(frame,1,text);
- }else line(frame,1,"WIFI: OFFLINE");
- if(s.calibrating){snprintf(text,sizeof(text),"CALIBRATE %d/9 %d/12",s.stage+1,s.samples);line(frame,2,text);line(frame,3,s.waiting?"TAP READY ON PHONE":"HOLD POSE");}
- else if(!s.monitoring)line(frame,2,"TAP CALIBRATE");
- else if(s.age_ms<0||s.age_ms>=2500)line(frame,2,"WAITING FOR CAMERA");
- else line(frame,2,s.face?"FACE: DETECTED":"FACE: NOT DETECTED");
+ uint8_t frame[1024]={};
  const bool live=!s.calibrating&&s.monitoring&&s.face&&s.age_ms>=0&&s.age_ms<2500;
- if(live){
+ if(live&&event>=0){
   constexpr const char *labels[]={"EYES CLOSED","MOUTH OPEN","HEAD DOWN","LOOKING AWAY","HEAD TILT"};
-  if(event>=0){
-   draw_caution(frame);
-   line(frame,5,"ALERT!",true);
-   line(frame,6,labels[event],true);
-  }else line(frame,4,"MONITORING",true);
+  draw_caution(frame);
+  line(frame,5,"ALERT!",true);
+  line(frame,6,labels[event],true);
+ }else{
+  char text[32];
+  line(frame,0,"SAFE ROAD");
+  wifi_ap_record_t ap={};
+  if(s.wifi&&esp_wifi_sta_get_ap_info(&ap)==ESP_OK){
+   char ssid[16]={};
+   for(size_t i=0;i<sizeof(ssid)-1&&ap.ssid[i];i++){
+    const auto c=ap.ssid[i];
+    ssid[i]=c>='a'&&c<='z'?char(c-'a'+'A'):c>=32&&c<=126?char(c):'-';
+   }
+   snprintf(text,sizeof(text),"WIFI: %s",ssid);
+   line(frame,1,text);
+  }else line(frame,1,"WIFI: OFFLINE");
+  if(s.calibrating){snprintf(text,sizeof(text),"CALIBRATE %d/9 %d/12",s.stage+1,s.samples);line(frame,2,text);line(frame,3,s.waiting?"TAP READY ON PHONE":"HOLD POSE");}
+  else if(!s.monitoring)line(frame,2,"TAP CALIBRATE");
+  else if(s.age_ms<0||s.age_ms>=2500)line(frame,2,"WAITING FOR CAMERA");
+  else if(!s.face)line(frame,2,"FACE: NOT DETECTED");
+  if(live){
+   // Two OLED pages of a 12 x 16 face icon, centered above the label.
+   constexpr uint8_t face_top[]={0xe0,0x18,0x04,0x82,0x82,0x01,0x01,0x82,0x82,0x04,0x18,0xe0};
+   constexpr uint8_t face_bottom[]={0x07,0x18,0x20,0x44,0x48,0x88,0x88,0x48,0x44,0x20,0x18,0x07};
+   memcpy(frame+2*128+58,face_top,sizeof(face_top));
+   memcpy(frame+3*128+58,face_bottom,sizeof(face_bottom));
+   line(frame,4,"MONITORING",true);
+  }
+  line(frame,7,"192.168.4.1");
  }
- line(frame,7,"192.168.4.1");
  for(int page=0;page<8;page++){
   // Reposition each chunk so a retry can redraw the entire frame.
   constexpr int chunk_size=32;
