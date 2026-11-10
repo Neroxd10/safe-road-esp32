@@ -97,8 +97,8 @@ open http://192.168.4.1.
 Load notification settings and choose event types and hold times. The default
 hold times are 1.5 seconds for eyes closed, 3 seconds for mouth open, and 2.5
 seconds each for head down, looking away and head tilt. You can set each to
-0.5–60 seconds. The buzzer sounds in bursts for an enabled sustained detection
-and works offline. Remote alerts use a per-event cooldown and run in a worker
+0.5–60 seconds. The buzzer sounds in bursts alongside the full-screen OLED
+alert at each configured count milestone, including offline. Remote alerts use a per-event cooldown and run in a worker
 separate from camera processing. The OLED displays one active alert at a time.
 
 For step-by-step setup, see [Gmail SMTP and MacroDroid webhooks](NOTIFICATIONS.md).

@@ -176,29 +176,31 @@ static void task(void *){
  init_buzzer();init_oled();int64_t next_draw=0;bool previous=false;
  uint32_t pending_milestones=0;
  int display_event=-1;
- int64_t display_until=0;
+ int64_t alert_started=0;
  while(true){
   Snapshot s;const bool valid=read_snapshot&&read_snapshot(s);const int64_t now=esp_timer_get_time()/1000;
-  int limits[5];uint32_t events=0;
-  const bool policy=alerts::local_policy(limits,events);
-  int event=valid&&policy?alert_event(s.monitoring,s.face,s.age_ms,s.durations,limits,events):-1;
-  bool on=pulse(event,now);if(on!=previous){set_buzzer(on);previous=on;}
-  if(oled&&valid&&now>=next_draw){
-   pending_milestones|=alerts::take_display_milestones();
-   if(now>=display_until){
+  pending_milestones|=alerts::take_display_milestones();
+  const int previous_event=display_event;
+  bool started_alert=false;
+  if(display_event<0||now-alert_started>=2250){
     display_event=-1;
     for(int i=0;i<alerts::event_count;i++){
      const uint32_t bit=1u<<i;
      if(!(pending_milestones&bit))continue;
      pending_milestones&=~bit;
      display_event=i;
-     display_until=now+2250;
+     started_alert=true;
      break;
     }
-   }
+  }
+  if(oled&&(valid||display_event>=0)&&(now>=next_draw||started_alert||display_event!=previous_event)){
    draw(s,display_event);
    next_draw=now+750;
   }
+  const int64_t after_draw=esp_timer_get_time()/1000;
+  if(started_alert)alert_started=after_draw;
+  const bool on=pulse(display_event,after_draw-alert_started);
+  if(on!=previous){set_buzzer(on);previous=on;}
   vTaskDelay(pdMS_TO_TICKS(30));
  }
 }
