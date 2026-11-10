@@ -87,6 +87,18 @@ static void line(uint8_t *buffer,int row,const char *s,bool centered=false){
  const int start=centered?(128-length*6+1)/2:0;
  for(int x=0;x<length;x++)glyph(s[x],buffer+row*128+start+x*6);
 }
+static void draw_caution(uint8_t *frame){
+ constexpr int center=64,top=24,height=15,half_base=12;
+ auto pixel=[frame](int x,int y){frame[(y/8)*128+x]|=uint8_t(1u<<(y%8));};
+ for(int y=0;y<height;y++){
+  const int half_width=y*half_base/(height-1);
+  pixel(center-half_width,top+y);
+  pixel(center+half_width,top+y);
+ }
+ for(int x=center-half_base;x<=center+half_base;x++)pixel(x,top+height-1);
+ for(int y=top+5;y<=top+9;y++)pixel(center,y);
+ pixel(center,top+11);
+}
 static void draw(const Snapshot &s,int event){
  uint8_t frame[1024]={};char text[32];
  line(frame,0,"SAFE ROAD");
@@ -108,8 +120,9 @@ static void draw(const Snapshot &s,int event){
  if(live){
   constexpr const char *labels[]={"EYES CLOSED","MOUTH OPEN","HEAD DOWN","LOOKING AWAY","HEAD TILT"};
   if(event>=0){
-   line(frame,4,"ALERT!",true);
-   line(frame,5,labels[event],true);
+   draw_caution(frame);
+   line(frame,5,"ALERT!",true);
+   line(frame,6,labels[event],true);
   }else line(frame,4,"MONITORING",true);
  }
  line(frame,7,"192.168.4.1");
