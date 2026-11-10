@@ -30,7 +30,7 @@ template<class Transport> int smtp_reply(Transport &io){
     }
     return -1;
 }
-template<class Transport> const char *smtp_send(Transport &io,const char *user,const char *password,const char *to,const std::string &body,const char *illustration=nullptr){
+template<class Transport> const char *smtp_send(Transport &io,const char *user,const char *password,const char *to,const std::string &body,const char *illustration=nullptr,bool count_summary=false){
     auto command=[&](const std::string &s,int code){return io.write_all(s+"\r\n")&&smtp_reply(io)==code;};
     if(smtp_reply(io)!=220)return "Gmail greeting failed";
     if(!command("EHLO safe-road.local",250))return "Gmail EHLO failed";
@@ -39,7 +39,9 @@ template<class Transport> const char *smtp_send(Transport &io,const char *user,c
     if(!command(std::string("RCPT TO:<")+to+">",250))return "Gmail rejected recipient";
     if(!command("DATA",354))return "Gmail DATA failed";
     constexpr char boundary[]="=_safe_road_event";
-    std::string message=std::string("From: <")+user+">\r\nTo: <"+to+">\r\nSubject: SAFE ROAD monitoring event\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\""+boundary+"\"\r\n\r\n--"+boundary+"\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n";
+    const char *title=count_summary?"Detection count":"Monitoring notification";
+    const char *subject=count_summary?"SAFE ROAD detection count":"SAFE ROAD monitoring event";
+    std::string message=std::string("From: <")+user+">\r\nTo: <"+to+">\r\nSubject: "+subject+"\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\""+boundary+"\"\r\n\r\n--"+boundary+"\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n";
     bool start=true;
     for(char c:body){if(start&&c=='.')message+='.';if(c=='\n'){message+="\r\n";start=true;}else if(c!='\r'){message+=c;start=false;}}
     if(message.size()<2||message.substr(message.size()-2)!="\r\n")message+="\r\n";
@@ -53,7 +55,9 @@ template<class Transport> const char *smtp_send(Transport &io,const char *user,c
         "<div style=\"max-width:560px;margin:auto;background:#fff;border:1px solid #efc5ca;border-radius:16px;overflow:hidden\">\r\n"
         "<div style=\"background:#a11228;color:#fff;padding:28px 24px;border-bottom:5px solid #ed5367\">\r\n"
         "<p style=\"display:inline-block;margin:0 0 12px;padding:5px 9px;background:#750d20;color:#fff;font-size:12px;font-weight:bold;letter-spacing:2px;border-radius:4px\">SAFE ROAD</p>\r\n"
-        "<h1 style=\"margin:0;font-size:28px;line-height:1.2\">Monitoring notification</h1></div>\r\n"
+        "<h1 style=\"margin:0;font-size:28px;line-height:1.2\">";
+    message+=title;
+    message+="</h1></div>\r\n"
         "<div style=\"padding:24px;font-size:15px;line-height:1.6\">\r\n";
     if(illustration){
         message+="<div style=\"margin:0 0 24px;padding:18px;text-align:center;background:#fff1f2;border:1px solid #efc5ca;border-radius:12px\">\r\n"

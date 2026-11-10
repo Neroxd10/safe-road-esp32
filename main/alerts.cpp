@@ -22,6 +22,7 @@ struct Config {
     char user[96]={},recipient[96]={},password[33]={},url[512]={};
 };
 struct Item {uint32_t revision;int event;int64_t duration,created;uint8_t channels;uint32_t count;};
+constexpr uint8_t event_email=1,webhook=2,count_email=4;
 static Config config;
 static int hold_ms[5]={1500,3000,2500,2500,2500};
 static uint32_t revision=1;
@@ -32,6 +33,7 @@ static QueueHandle_t queue=nullptr;
 static std::atomic<bool> *online=nullptr;
 static char device[32]={},email_result[96]="Not sent yet",webhook_result[96]="Not sent yet";
 static Gate gate;
+static Gate webhook_gate;
 static std::atomic<bool> started{false};
 static std::atomic<uint32_t> reset_generation{0};
 static uint32_t seen_generation=0;
@@ -70,21 +72,30 @@ struct TlsTransport {
         return false;
     }
 };
-static std::string event_body(const Item &item){
+static std::string event_body(const Item &item,bool include_count=false){
     char body[512];
     char count_line[64]={};
-    if(item.event>=0)snprintf(count_line,sizeof(count_line),"Detections of this type since boot: %lu\n",static_cast<unsigned long>(item.count));
+    if(include_count&&item.event>=0)snprintf(count_line,sizeof(count_line),"Detections of this type since boot: %lu\n",static_cast<unsigned long>(item.count));
     const char *label=item.event<0?"Test notification":event_labels[item.event];
     snprintf(body,sizeof(body),"SAFE ROAD\nDevice: %s\nEvent: %s\n%sObserved duration: %.3f seconds\nDevice uptime: %.3f seconds\n\nExperimental camera-based monitoring event; not a confirmed drowsiness or yawn diagnosis.\n",
         device,label,count_line,double(item.duration)/1000.0,double(item.created)/1000.0);
     return body;
 }
-static void send_email(const Config &c,const Item &item){
+static void send_email(const Config &c,const Item &item,bool count_summary=false){
     static_assert(sizeof(email_illustrations)/sizeof(email_illustrations[0])==event_count);
-    const char *illustration=item.event>=0&&item.event<event_count?email_illustrations[item.event]:nullptr;
+    const char *illustration=!count_summary&&item.event>=0&&item.event<event_count?email_illustrations[item.event]:nullptr;
+    std::string body;
+    if(count_summary){
+        char summary[256];
+        snprintf(summary,sizeof(summary),"SAFE ROAD\nDevice: %s\nEvent: %s\nDetections of this type since boot: %lu\n",
+            device,event_labels[item.event],static_cast<unsigned long>(item.count));
+        body=summary;
+    }else{
+        body=event_body(item);
+    }
     TlsTransport transport;
     if(!transport.connect()){result(true,"Gmail TLS connection failed; check internet and clock");return;}
-    const char *err=smtp_send(transport,c.user,c.password,c.recipient,event_body(item),illustration);
+    const char *err=smtp_send(transport,c.user,c.password,c.recipient,body,illustration,count_summary);
     result(true,err?err:"Email accepted by Gmail");
 }
 static void send_webhook(const Config &c,const Item &item){
@@ -95,7 +106,7 @@ static void send_webhook(const Config &c,const Item &item){
     cJSON_AddNumberToObject(doc,"duration_ms",double(item.duration));
     cJSON_AddNumberToObject(doc,"uptime_ms",double(item.created));
     cJSON_AddBoolToObject(doc,"experimental",true);
-    const auto body=event_body(item);cJSON_AddStringToObject(doc,"text",body.c_str());cJSON_AddStringToObject(doc,"content",body.c_str());
+    const auto body=event_body(item,true);cJSON_AddStringToObject(doc,"text",body.c_str());cJSON_AddStringToObject(doc,"content",body.c_str());
     char *json=cJSON_PrintUnformatted(doc);cJSON_Delete(doc);
     if(!json){result(false,"Out of memory");return;}
     esp_http_client_config_t cfg={};cfg.url=c.url;cfg.method=HTTP_METHOD_POST;cfg.timeout_ms=8000;
@@ -119,12 +130,13 @@ static void worker(void *){
         if(!lock())continue;
         c=config;current=revision;unlock();
         if(item.revision!=current)continue;
-        auto fail=[&](const char *s){if(item.channels&1)result(true,s);if(item.channels&2)result(false,s);};
+        auto fail=[&](const char *s){if(item.channels&(event_email|count_email))result(true,s);if(item.channels&webhook)result(false,s);};
         if(esp_timer_get_time()/1000-item.created>30000){fail("Expired; no old notification sent");continue;}
         if(!ready()){fail("Offline; notification skipped");continue;}
         if(time(nullptr)<1700000000){fail("Waiting for internet time sync; try again shortly");continue;}
-        if(item.channels&1)send_email(c,item);
-        if((item.channels&2)&&ready())send_webhook(c,item);
+        if(item.channels&event_email)send_email(c,item);
+        if((item.channels&webhook)&&ready())send_webhook(c,item);
+        if((item.channels&count_email)&&ready())send_email(c,item,true);
     }
 }
 bool init(const char *id,std::atomic<bool> *connected){
@@ -164,11 +176,15 @@ void observe(const int64_t durations[5]){
     if(!lock())return;
     c=config;rev=revision;every=notify_every;memcpy(limits,hold_ms,sizeof(limits));unlock();
     const int64_t now=esp_timer_get_time()/1000;
-    const uint8_t channels=(c.email?1:0)|(c.webhook?2:0);
     for(int i=0;i<event_count;i++){
         if(!gate.qualify(i,durations[i],limits[i])||!(c.events&(1u<<i)))continue;
         const uint32_t count=++detection_counts[i];
-        if(!channels||count%every||!gate.allow(i,now,c.cooldown))continue;
+        const bool milestone=count%every==0;
+        uint8_t channels=0;
+        if(c.email&&gate.allow(i,now,c.cooldown))channels|=event_email;
+        if(c.webhook&&milestone&&webhook_gate.allow(i,now,c.cooldown))channels|=webhook;
+        if(c.email&&milestone)channels|=count_email;
+        if(!channels)continue;
         if(!ready()){if(c.email)result(true,"Offline; monitoring continues");if(c.webhook)result(false,"Offline; monitoring continues");continue;}
         Item item{rev,i,durations[i],now,channels,count};
         if(xQueueSend(queue,&item,0)!=pdTRUE){if(c.email)result(true,"Notification queue full");if(c.webhook)result(false,"Notification queue full");}
@@ -196,7 +212,7 @@ cJSON *request(cJSON *doc){
         const bool email=!strcmp(action->valuestring,"test_email");
         if(!ready())return error("Connect the device to internet Wi-Fi first");
         if((email&&!next.email)||(!email&&!next.webhook))return error("Enable and save this channel first");
-        Item item{rev,-1,0,esp_timer_get_time()/1000,uint8_t(email?1:2),0};
+        Item item{rev,-1,0,esp_timer_get_time()/1000,email?event_email:webhook,0};
         if(xQueueSend(queue,&item,0)!=pdTRUE)return error("Notification queue full; retry shortly");
         result(email,"Test queued");auto *out=cJSON_CreateObject();cJSON_AddStringToObject(out,"message","Test queued; check delivery status below");return out;
     }

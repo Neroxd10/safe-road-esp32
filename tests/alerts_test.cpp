@@ -41,6 +41,11 @@ int main(){
      assert(illustrated.output.find(std::string("\r\n\r\n")+illustration+"--=_safe_road_image--\r\n")!=std::string::npos);
  }
  assert(t.output.find("multipart/related")==std::string::npos);
+ Transport summary{ok,""};
+ assert(!smtp_send(summary,"u","p","t","Detections of this type since boot: 2\n",nullptr,true));
+ assert(summary.output.find("Subject: SAFE ROAD detection count\r\n")!=std::string::npos);
+ assert(summary.output.find(">Detection count</h1>")!=std::string::npos);
+ assert(summary.output.find("multipart/related")==std::string::npos);
  Transport rejected{"220 ready\r\n250 ok\r\n334 user\r\n334 pass\r\n535 denied\r\n",""};
  assert(std::string(smtp_send(rejected,"u","p","t","body")).find("authentication")!=std::string::npos);
  assert(rejected.output.find("MAIL FROM")==std::string::npos);
