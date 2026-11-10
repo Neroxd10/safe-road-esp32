@@ -83,7 +83,8 @@ static void init_oled(){
  else ESP_LOGW("HARDWARE","OLED responded to probe but SH1106 setup transfer failed: %s",esp_err_to_name(initialized));
 }
 static void line(uint8_t *buffer,int row,const char *s,bool centered=false){
- const int length=strnlen(s,21);
+ int length=0;
+ while(length<21&&s[length])++length;
  const int start=centered?(128-length*6+1)/2:0;
  for(int x=0;x<length;x++)glyph(s[x],buffer+row*128+start+x*6);
 }
