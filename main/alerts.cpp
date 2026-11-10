@@ -178,11 +178,12 @@ void observe(const int64_t durations[5]){
     if(!lock())return;
     c=config;rev=revision;every=notify_every;memcpy(limits,hold_ms,sizeof(limits));unlock();
     const int64_t now=esp_timer_get_time()/1000;
+    uint32_t milestones=0;
     for(int i=0;i<event_count;i++){
         if(!gate.qualify(i,durations[i],limits[i])||!(c.events&(1u<<i)))continue;
         const uint32_t count=++detection_counts[i];
         const bool milestone=count%every==0;
-        if(milestone)display_milestones.fetch_or(1u<<i);
+        if(milestone)milestones|=1u<<i;
         uint8_t channels=0;
         if(c.email&&gate.allow(i,now,c.cooldown))channels|=event_email;
         if(c.webhook&&milestone&&webhook_gate.allow(i,now,c.cooldown))channels|=webhook;
@@ -192,6 +193,7 @@ void observe(const int64_t durations[5]){
         Item item{rev,i,durations[i],now,channels,count};
         if(xQueueSend(queue,&item,0)!=pdTRUE){if(c.email)result(true,"Notification queue full");if(c.webhook)result(false,"Notification queue full");}
     }
+    if(milestones)display_milestones.fetch_or(milestones);
 }
 static bool boolean(cJSON *d,const char *name,bool &dest){auto *v=cJSON_GetObjectItemCaseSensitive(d,name);if(!cJSON_IsBool(v))return false;dest=cJSON_IsTrue(v);return true;}
 static bool string(cJSON *d,const char *name,char *dest,size_t size,bool keep_empty=false){

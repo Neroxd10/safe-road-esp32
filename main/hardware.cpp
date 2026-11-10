@@ -87,8 +87,9 @@ static void line(uint8_t *buffer,int row,const char *s,bool centered=false){
  const int start=centered?(128-length*6+1)/2:0;
  for(int x=0;x<length;x++)glyph(s[x],buffer+row*128+start+x*6);
 }
-static void draw_caution(uint8_t *frame){
- constexpr int center=64,top=7,height=27,half_base=19;
+static void draw_caution(uint8_t *frame,bool compact){
+ constexpr int center=64;
+ const int top=compact?0:7,height=compact?15:27,half_base=compact?10:19;
  auto pixel=[frame](int x,int y){frame[(y/8)*128+x]|=uint8_t(1u<<(y%8));};
  for(int y=0;y<height;y++){
   const int half_width=y*half_base/(height-1);
@@ -96,17 +97,27 @@ static void draw_caution(uint8_t *frame){
   pixel(center+half_width,top+y);
  }
  for(int x=center-half_base;x<=center+half_base;x++)pixel(x,top+height-1);
- for(int y=top+9;y<=top+17;y++)pixel(center,y);
- pixel(center,top+21);
+ for(int y=height/3;y<2*height/3;y++)pixel(center,top+y);
+ pixel(center,top+height-4);
 }
-static void draw(const Snapshot &s,int event){
+static void draw(const Snapshot &s,uint32_t alert_events){
  uint8_t frame[1024]={};
  const bool camera_ready=!s.calibrating&&s.monitoring&&s.age_ms>=0&&s.age_ms<2500;
- if(event>=0){
+ if(alert_events){
   constexpr const char *labels[]={"EYES CLOSED","MOUTH OPEN","HEAD DOWN","LOOKING AWAY","HEAD TILT"};
-  draw_caution(frame);
-  line(frame,5,"ALERT!",true);
-  line(frame,6,labels[event],true);
+  const int count=__builtin_popcount(alert_events);
+  const bool compact=count>2;
+  int row=compact?2:5;
+  draw_caution(frame,compact);
+  line(frame,row++,"ALERT!",true);
+  for(int i=0;i<alerts::event_count;i++){
+   if(!(alert_events&(1u<<i)))continue;
+   if(count==2&&row==7){
+    char text[22];
+    snprintf(text,sizeof(text),"AND %s",labels[i]);
+    line(frame,row++,text,true);
+   }else line(frame,row++,labels[i],true);
+  }
  }else if(camera_ready&&s.face){
   char text[32];
   line(frame,0,"MONITORING",true);
@@ -175,31 +186,26 @@ static void init_buzzer(){
 static void task(void *){
  init_buzzer();init_oled();int64_t next_draw=0;bool previous=false;
  uint32_t pending_milestones=0;
- int display_event=-1;
+ uint32_t display_events=0;
  int64_t alert_started=0;
  while(true){
   Snapshot s;const bool valid=read_snapshot&&read_snapshot(s);const int64_t now=esp_timer_get_time()/1000;
   pending_milestones|=alerts::take_display_milestones();
-  const int previous_event=display_event;
+  const uint32_t previous_events=display_events;
   bool started_alert=false;
-  if(display_event<0||now-alert_started>=2250){
-    display_event=-1;
-    for(int i=0;i<alerts::event_count;i++){
-     const uint32_t bit=1u<<i;
-     if(!(pending_milestones&bit))continue;
-     pending_milestones&=~bit;
-     display_event=i;
-     started_alert=true;
-     break;
-    }
+  if(!display_events||now-alert_started>=2250){
+   display_events=pending_milestones;
+   pending_milestones=0;
+   started_alert=display_events!=0;
   }
-  if(oled&&(valid||display_event>=0)&&(now>=next_draw||started_alert||display_event!=previous_event)){
-   draw(s,display_event);
+  if(oled&&(valid||display_events)&&(now>=next_draw||started_alert||display_events!=previous_events)){
+   draw(s,display_events);
    next_draw=now+750;
   }
   const int64_t after_draw=esp_timer_get_time()/1000;
   if(started_alert)alert_started=after_draw;
-  const bool on=pulse(display_event,after_draw-alert_started);
+  const int buzzer_event=display_events?__builtin_ctz(display_events):-1;
+  const bool on=pulse(buzzer_event,after_draw-alert_started);
   if(on!=previous){set_buzzer(on);previous=on;}
   vTaskDelay(pdMS_TO_TICKS(30));
  }
