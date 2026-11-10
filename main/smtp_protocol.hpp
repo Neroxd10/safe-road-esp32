@@ -41,6 +41,12 @@ template<class Transport> const char *smtp_send(Transport &io,const char *user,c
     constexpr char boundary[]="=_safe_road_event";
     const char *title=count_summary?"Detection count":"Monitoring notification";
     const char *subject=count_summary?"SAFE ROAD detection count":"SAFE ROAD monitoring event";
+    const std::string background=count_summary?"#fff1f2":"#f1f2ff";
+    const std::string border=count_summary?"#efc5ca":"#caceef";
+    const std::string primary=count_summary?"#a11228":"#1228a1";
+    const std::string accent=count_summary?"#ed5367":"#5367ed";
+    const std::string badge=count_summary?"#750d20":"#0d2075";
+    const std::string ink=count_summary?"#3b2024":"#20243b";
     std::string message=std::string("From: <")+user+">\r\nTo: <"+to+">\r\nSubject: "+subject+"\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\""+boundary+"\"\r\n\r\n--"+boundary+"\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n";
     bool start=true;
     for(char c:body){if(start&&c=='.')message+='.';if(c=='\n'){message+="\r\n";start=true;}else if(c!='\r'){message+=c;start=false;}}
@@ -51,19 +57,19 @@ template<class Transport> const char *smtp_send(Transport &io,const char *user,c
             "--=_safe_road_image\r\n";
     }
     message+="Content-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n"
-        "<!doctype html><html lang=\"en\"><body style=\"margin:0;padding:24px;background:#fff1f2;font-family:Arial,sans-serif;color:#3b2024\">\r\n"
-        "<div style=\"max-width:560px;margin:auto;background:#fff;border:1px solid #efc5ca;border-radius:16px;overflow:hidden\">\r\n"
-        "<div style=\"background:#a11228;color:#fff;padding:28px 24px;border-bottom:5px solid #ed5367\">\r\n"
-        "<p style=\"display:inline-block;margin:0 0 12px;padding:5px 9px;background:#750d20;color:#fff;font-size:12px;font-weight:bold;letter-spacing:2px;border-radius:4px\">SAFE ROAD</p>\r\n"
+        "<!doctype html><html lang=\"en\"><body style=\"margin:0;padding:24px;background:"+background+";font-family:Arial,sans-serif;color:"+ink+"\">\r\n"
+        "<div style=\"max-width:560px;margin:auto;background:#fff;border:1px solid "+border+";border-radius:16px;overflow:hidden\">\r\n"
+        "<div style=\"background:"+primary+";color:#fff;padding:28px 24px;border-bottom:5px solid "+accent+"\">\r\n"
+        "<p style=\"display:inline-block;margin:0 0 12px;padding:5px 9px;background:"+badge+";color:#fff;font-size:12px;font-weight:bold;letter-spacing:2px;border-radius:4px\">SAFE ROAD</p>\r\n"
         "<h1 style=\"margin:0;font-size:28px;line-height:1.2\">";
     message+=title;
     message+="</h1></div>\r\n"
         "<div style=\"padding:24px;font-size:15px;line-height:1.6\">\r\n";
     if(illustration){
-        message+="<div style=\"margin:0 0 24px;padding:18px;text-align:center;background:#fff1f2;border:1px solid #efc5ca;border-radius:12px\">\r\n"
+        message+="<div style=\"margin:0 0 24px;padding:18px;text-align:center;background:"+background+";border:1px solid "+border+";border-radius:12px\">\r\n"
             "<img src=\"cid:detected-event@safe-road.local\" width=\"168\" height=\"116\" alt=\"Detection illustration\"></div>\r\n";
     }
-    message+="<h2 style=\"margin:0 0 12px;padding-bottom:8px;border-bottom:1px solid #efc5ca;color:#a11228;font-size:15px\">Event details</h2>\r\n";
+    message+="<h2 style=\"margin:0 0 12px;padding-bottom:8px;border-bottom:1px solid "+border+";color:"+primary+";font-size:15px\">Event details</h2>\r\n";
     // The plain-text body starts with the brand, which is already in the HTML header.
     const size_t details=body.find("SAFE ROAD\n")==0?10:0;
     for(size_t i=details;i<body.size();++i){
