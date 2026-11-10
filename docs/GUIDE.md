@@ -103,9 +103,11 @@ separate from camera processing. The OLED displays one active alert at a time.
 
 For step-by-step setup, see [Gmail SMTP and MacroDroid webhooks](NOTIFICATIONS.md).
 
-The OLED shows the connected Wi-Fi name and the dashboard address. During live
-monitoring it displays MONITORING or ALERT! with the active detection below it.
-The dashboard shows internet verification and email and webhook delivery status.
+The OLED shows a SAFE ROAD standby screen when the camera sees no face. When a
+face is visible, it shows live readings and Wi-Fi status. Each detection type
+briefly gets a full-screen alert when its count reaches a multiple of the
+configured notification count. The alert appears even when email and webhook
+delivery are disabled.
 
 ## Where the code lives
 

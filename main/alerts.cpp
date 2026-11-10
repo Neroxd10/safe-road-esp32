@@ -28,6 +28,8 @@ static int hold_ms[5]={1500,3000,2500,2500,2500};
 static uint32_t revision=1;
 static uint32_t notify_every=1;
 static std::atomic<uint32_t> detection_counts[event_count]{};
+static std::atomic<uint32_t> display_milestones{0};
+uint32_t take_display_milestones(){return display_milestones.exchange(0);}
 static SemaphoreHandle_t mutex=nullptr;
 static QueueHandle_t queue=nullptr;
 static std::atomic<bool> *online=nullptr;
@@ -180,6 +182,7 @@ void observe(const int64_t durations[5]){
         if(!gate.qualify(i,durations[i],limits[i])||!(c.events&(1u<<i)))continue;
         const uint32_t count=++detection_counts[i];
         const bool milestone=count%every==0;
+        if(milestone)display_milestones.fetch_or(1u<<i);
         uint8_t channels=0;
         if(c.email&&gate.allow(i,now,c.cooldown))channels|=event_email;
         if(c.webhook&&milestone&&webhook_gate.allow(i,now,c.cooldown))channels|=webhook;

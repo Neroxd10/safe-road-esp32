@@ -2,7 +2,6 @@
 #include "alerts.hpp"
 #include "hardware_policy.hpp"
 #include "oled_font.hpp"
-#include "esp_wifi.h"
 #include "sdkconfig.h"
 #include "driver/i2c_master.h"
 #include "driver/ledc.h"
@@ -102,37 +101,40 @@ static void draw_caution(uint8_t *frame){
 }
 static void draw(const Snapshot &s,int event){
  uint8_t frame[1024]={};
- const bool live=!s.calibrating&&s.monitoring&&s.face&&s.age_ms>=0&&s.age_ms<2500;
- if(live&&event>=0){
+ const bool camera_ready=!s.calibrating&&s.monitoring&&s.age_ms>=0&&s.age_ms<2500;
+ if(event>=0){
   constexpr const char *labels[]={"EYES CLOSED","MOUTH OPEN","HEAD DOWN","LOOKING AWAY","HEAD TILT"};
   draw_caution(frame);
   line(frame,5,"ALERT!",true);
   line(frame,6,labels[event],true);
- }else{
+ }else if(camera_ready&&s.face){
   char text[32];
+  line(frame,0,"MONITORING",true);
+  line(frame,1,!s.wifi?"WIFI: OFFLINE":internet_recent()?"WIFI: VERIFIED":"WIFI: UNVERIFIED");
+  line(frame,2,"FACE: DETECTED");
+  const char *eyes=!strcmp(s.eye,"OPEN-LIKE")?"OPEN":!strcmp(s.eye,"CLOSED-LIKE")?"CLOSED":"-";
+  const char *mouth=!strcmp(s.mouth,"OPEN-LIKE")?"OPEN":!strcmp(s.mouth,"SHUT-LIKE")?"CLOSED":"-";
+  snprintf(text,sizeof(text),"EYES:%s M:%s",eyes,mouth);line(frame,3,text);
+  snprintf(text,sizeof(text),"HEAD DOWN: %s",s.down?"YES":"NO");line(frame,4,text);
+  snprintf(text,sizeof(text),"HEAD TILT: %s",s.tilt);line(frame,5,text);
+  snprintf(text,sizeof(text),"LOOKING AWAY: %s",s.away);line(frame,6,text);
+  line(frame,7,"192.168.4.1");
+ }else if(camera_ready){
+  constexpr uint8_t face_icon[]={0xe7,0x81,0x81,0x28,0x10,0x10,0x10,0x28,0x81,0x81,0xe7};
+  constexpr uint8_t wifi_icon[]={4,2,9,5,21,69,21,5,9,2,4};
+  memcpy(frame+4,face_icon,sizeof(face_icon));
+  memcpy(frame+113,wifi_icon,sizeof(wifi_icon));
+  if(!s.wifi)for(int x=0;x<8;x++)frame[114+x]|=uint8_t(1u<<(7-x));
+  line(frame,3,"SAFE ROAD",true);
+  line(frame,7,"192.168.4.1",true);
+ }else{
   line(frame,0,"SAFE ROAD");
-  wifi_ap_record_t ap={};
-  if(s.wifi&&esp_wifi_sta_get_ap_info(&ap)==ESP_OK){
-   char ssid[16]={};
-   for(size_t i=0;i<sizeof(ssid)-1&&ap.ssid[i];i++){
-    const auto c=ap.ssid[i];
-    ssid[i]=c>='a'&&c<='z'?char(c-'a'+'A'):c>=32&&c<=126?char(c):'-';
-   }
-   snprintf(text,sizeof(text),"WIFI: %s",ssid);
-   line(frame,1,text);
-  }else line(frame,1,"WIFI: OFFLINE");
-  if(s.calibrating){snprintf(text,sizeof(text),"CALIBRATE %d/9 %d/12",s.stage+1,s.samples);line(frame,2,text);line(frame,3,s.waiting?"TAP READY ON PHONE":"HOLD POSE");}
-  else if(!s.monitoring)line(frame,2,"TAP CALIBRATE");
-  else if(s.age_ms<0||s.age_ms>=2500)line(frame,2,"WAITING FOR CAMERA");
-  else if(!s.face)line(frame,2,"FACE: NOT DETECTED");
-  if(live){
-   // Two OLED pages of a 12 x 16 face icon, centered above the label.
-   constexpr uint8_t face_top[]={0xe0,0x18,0x04,0x82,0x82,0x01,0x01,0x82,0x82,0x04,0x18,0xe0};
-   constexpr uint8_t face_bottom[]={0x07,0x18,0x20,0x44,0x48,0x88,0x88,0x48,0x44,0x20,0x18,0x07};
-   memcpy(frame+2*128+58,face_top,sizeof(face_top));
-   memcpy(frame+3*128+58,face_bottom,sizeof(face_bottom));
-   line(frame,4,"MONITORING",true);
-  }
+  if(s.calibrating){
+   char text[32];
+   snprintf(text,sizeof(text),"CALIBRATE %d/9 %d/12",s.stage+1,s.samples);
+   line(frame,2,text);
+   line(frame,3,s.waiting?"TAP READY ON PHONE":"HOLD POSE");
+  }else line(frame,2,s.monitoring?"WAITING FOR CAMERA":"TAP CALIBRATE");
   line(frame,7,"192.168.4.1");
  }
  for(int page=0;page<8;page++){
@@ -172,13 +174,31 @@ static void init_buzzer(){
 }
 static void task(void *){
  init_buzzer();init_oled();int64_t next_draw=0;bool previous=false;
+ uint32_t pending_milestones=0;
+ int display_event=-1;
+ int64_t display_until=0;
  while(true){
   Snapshot s;const bool valid=read_snapshot&&read_snapshot(s);const int64_t now=esp_timer_get_time()/1000;
   int limits[5];uint32_t events=0;
   const bool policy=alerts::local_policy(limits,events);
   int event=valid&&policy?alert_event(s.monitoring,s.face,s.age_ms,s.durations,limits,events):-1;
   bool on=pulse(event,now);if(on!=previous){set_buzzer(on);previous=on;}
-  if(oled&&now>=next_draw){if(valid)draw(s,event);next_draw=now+750;}
+  if(oled&&valid&&now>=next_draw){
+   pending_milestones|=alerts::take_display_milestones();
+   if(now>=display_until){
+    display_event=-1;
+    for(int i=0;i<alerts::event_count;i++){
+     const uint32_t bit=1u<<i;
+     if(!(pending_milestones&bit))continue;
+     pending_milestones&=~bit;
+     display_event=i;
+     display_until=now+2250;
+     break;
+    }
+   }
+   draw(s,display_event);
+   next_draw=now+750;
+  }
   vTaskDelay(pdMS_TO_TICKS(30));
  }
 }
